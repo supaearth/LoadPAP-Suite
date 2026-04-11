@@ -1,0 +1,289 @@
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap');
+  :root {
+    --bg0: #0d0f12;
+    --bg1: #13161b;
+    --bg2: #1a1e26;
+    --bg3: #222733;
+    --border: rgba(255,255,255,0.08);
+    --border-hi: rgba(255,255,255,0.15);
+    --text-1: #e8eaf0;
+    --text-2: #8b90a0;
+    --text-3: #555a6a;
+    --accent-blue: #4a9eff;
+    --accent-orange: #ff7a2f;
+    --accent-teal: #2dd4a8;
+    --accent-red: #ff4d4d;
+    --accent-yellow: #ffd166;
+    --font-display: 'Syne', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .guide { background: var(--bg0); color: var(--text-1); font-family: var(--font-display); padding: 24px; min-height: 100vh; }
+  .section-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; color: var(--text-3); text-transform: uppercase; margin-bottom: 12px; }
+  .section { margin-bottom: 32px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+
+  /* ─── COLORS ─── */
+  .swatch { width: 48px; height: 48px; border-radius: 8px; position: relative; cursor: default; }
+  .swatch-label { font-family: var(--font-mono); font-size: 9px; color: var(--text-3); margin-top: 4px; text-align: center; }
+
+  /* ─── TYPOGRAPHY ─── */
+  .t-display { font-family: var(--font-display); font-size: 28px; font-weight: 800; color: var(--text-1); line-height: 1.2; }
+  .t-title    { font-family: var(--font-display); font-size: 18px; font-weight: 600; color: var(--text-1); }
+  .t-body     { font-family: var(--font-display); font-size: 13px; font-weight: 400; color: var(--text-2); line-height: 1.6; }
+  .t-mono     { font-family: var(--font-mono); font-size: 12px; color: var(--accent-teal); }
+  .t-muted    { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); }
+
+  /* ─── CARDS ─── */
+  .card { background: var(--bg1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .card-accent { background: var(--bg1); border: 1px solid var(--border); border-top: 2px solid var(--accent-blue); border-radius: 12px; padding: 16px; }
+
+  /* ─── BADGES ─── */
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; }
+  .badge-blue   { background: rgba(74,158,255,0.15); color: var(--accent-blue); border: 1px solid rgba(74,158,255,0.25); }
+  .badge-orange { background: rgba(255,122,47,0.15); color: var(--accent-orange); border: 1px solid rgba(255,122,47,0.25); }
+  .badge-teal   { background: rgba(45,212,168,0.15); color: var(--accent-teal); border: 1px solid rgba(45,212,168,0.25); }
+  .badge-red    { background: rgba(255,77,77,0.15);  color: var(--accent-red);  border: 1px solid rgba(255,77,77,0.25); }
+  .badge-yellow { background: rgba(255,209,102,0.15); color: var(--accent-yellow); border: 1px solid rgba(255,209,102,0.25); }
+
+  /* ─── BUTTONS ─── */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-family: var(--font-display); font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: opacity 0.15s; }
+  .btn-primary { background: var(--accent-blue); color: #fff; }
+  .btn-danger  { background: rgba(255,77,77,0.2); color: var(--accent-red); border: 1px solid rgba(255,77,77,0.3); }
+  .btn-ghost   { background: transparent; color: var(--text-2); border: 1px solid var(--border-hi); }
+  .btn:hover { opacity: 0.85; }
+
+  /* ─── METRIC CARDS ─── */
+  .metric { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; min-width: 80px; }
+  .metric-val { font-family: var(--font-mono); font-size: 22px; font-weight: 600; }
+  .metric-lbl { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  /* ─── SIDEBAR ITEM ─── */
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; border: 1px solid transparent; }
+  .nav-item.active { background: var(--bg2); border-color: var(--border-hi); color: var(--text-1); }
+  .nav-item:not(.active) { color: var(--text-2); }
+  .nav-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  /* ─── STATUS ROW ─── */
+  .status-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg2); border-radius: 8px; border: 1px solid var(--border); margin-bottom: 6px; }
+  .status-icon { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ─── DIVIDER ─── */
+  .divider { height: 1px; background: var(--border); margin: 20px 0; }
+
+  /* ─── HEADER ─── */
+  .guide-header { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+  .logo { width: 36px; height: 36px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-teal)); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: #fff; }
+  .token-bar { font-family: var(--font-mono); font-size: 10px; padding: 3px 8px; background: var(--bg3); border-radius: 4px; color: var(--text-3); border: 1px solid var(--border); }
+
+  /* ─── CODE PREVIEW ─── */
+  .code-block { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); line-height: 1.7; overflow-x: auto; }
+  .kw { color: var(--accent-blue); }
+  .str { color: var(--accent-teal); }
+  .cm { color: var(--text-3); }
+</style>
+
+<div class="guide">
+  <div class="guide-header">
+    <div class="logo">LP</div>
+    <div>
+      <div class="t-title">LoadPAP Family — Dark Design System</div>
+      <div class="t-muted" style="margin-top:3px">สำหรับ PyS.A.R.N. · PyL.A.D. · PyJ.I.T.</div>
+    </div>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <span class="token-bar">v2.0-dark</span>
+      <span class="token-bar">Streamlit CSS</span>
+    </div>
+  </div>
+
+  <!-- COLORS -->
+  <div class="section">
+    <div class="section-label">01 — Color Palette</div>
+    <div class="row">
+      <div>
+        <div class="swatch" style="background:#0d0f12; border:1px solid rgba(255,255,255,0.1)"></div>
+        <div class="swatch-label">--bg0<br>#0d0f12</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#13161b"></div>
+        <div class="swatch-label">--bg1<br>#13161b</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#1a1e26"></div>
+        <div class="swatch-label">--bg2<br>#1a1e26</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#222733"></div>
+        <div class="swatch-label">--bg3<br>#222733</div>
+      </div>
+      <div style="width:1px; background:rgba(255,255,255,0.08); margin:0 4px"></div>
+      <div>
+        <div class="swatch" style="background:#4a9eff"></div>
+        <div class="swatch-label">blue<br>#4a9eff</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#ff7a2f"></div>
+        <div class="swatch-label">orange<br>#ff7a2f</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#2dd4a8"></div>
+        <div class="swatch-label">teal<br>#2dd4a8</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#ff4d4d"></div>
+        <div class="swatch-label">red<br>#ff4d4d</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#ffd166"></div>
+        <div class="swatch-label">yellow<br>#ffd166</div>
+      </div>
+      <div>
+        <div class="swatch" style="background:#8b90a0"></div>
+        <div class="swatch-label">text-2<br>#8b90a0</div>
+      </div>
+    </div>
+    <div class="t-body" style="margin-top:4px">
+      Blue = Getty/Drive/Info · Orange = Reuters · Teal = Success/AI · Red = Error/Reset · Yellow = Warning
+    </div>
+  </div>
+
+  <!-- TYPOGRAPHY -->
+  <div class="section">
+    <div class="section-label">02 — Typography · Syne Display + JetBrains Mono</div>
+    <div class="card" style="display:flex; flex-direction:column; gap:10px;">
+      <div class="t-display">🧠 PyS.A.R.N. (beta1.2)</div>
+      <div class="t-title">📋 Dashboard สรุปยอด</div>
+      <div class="t-body">ฟุตเทจรายการ Global Focus — ระบบพบรหัส Getty ใหม่ 12 รหัส, Reuters 5 รหัส</div>
+      <div class="t-mono">extract_id("docs.google.com/d/ABC123")</div>
+      <div class="t-muted">STATUS · SYSTEM MESSAGE · LABEL</div>
+    </div>
+  </div>
+
+  <!-- BADGES -->
+  <div class="section">
+    <div class="section-label">03 — Badges / Status Chips</div>
+    <div class="row" style="align-items:center">
+      <span class="badge badge-blue">🔵 Getty</span>
+      <span class="badge badge-orange">🟠 Reuters</span>
+      <span class="badge badge-teal">✅ Done</span>
+      <span class="badge badge-red">❌ Failed</span>
+      <span class="badge badge-yellow">⚠️ Waiting</span>
+      <span class="badge badge-blue">📁 Drive</span>
+      <span class="badge badge-teal">🤖 AI Running</span>
+    </div>
+  </div>
+
+  <!-- BUTTONS -->
+  <div class="section">
+    <div class="section-label">04 — Buttons</div>
+    <div class="row" style="align-items:center">
+      <button class="btn btn-primary">🚀 เริ่มค้นหาและดาวน์โหลด</button>
+      <button class="btn btn-danger">🛑 Reset แอป</button>
+      <button class="btn btn-ghost">📂 เลือกโฟลเดอร์</button>
+      <button class="btn btn-ghost">🔄 Retry</button>
+    </div>
+  </div>
+
+  <!-- METRIC DASHBOARD -->
+  <div class="section">
+    <div class="section-label">05 — Metric Dashboard (ตัวอย่าง PyS.A.R.N.)</div>
+    <div class="card-accent">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <div>
+          <div class="t-title">Global Focus - เลือกตั้งสหรัฐ</div>
+          <div class="t-muted" style="margin-top:3px">📂 /Downloads_Footage/Global Focus - เลือกตั้งสหรัฐ</div>
+        </div>
+        <div style="font-family:var(--font-mono); font-size:24px; color:var(--accent-red);">⏱ 02:34</div>
+      </div>
+      <div class="row">
+        <div class="metric"><div class="metric-val" style="color:var(--text-1)">47</div><div class="metric-lbl">📦 รวม</div></div>
+        <div class="metric"><div class="metric-val" style="color:var(--accent-blue)">12</div><div class="metric-lbl">🔵 Getty</div></div>
+        <div class="metric"><div class="metric-val" style="color:var(--accent-orange)">5</div><div class="metric-lbl">🟠 Reuters</div></div>
+        <div class="metric"><div class="metric-val" style="color:#81B441">3</div><div class="metric-lbl">🍃 Envato</div></div>
+        <div class="metric"><div class="metric-val" style="color:#FF0000">8</div><div class="metric-lbl">▶️ YT</div></div>
+        <div class="metric"><div class="metric-val" style="color:#1877F2">4</div><div class="metric-lbl">📘 FB</div></div>
+        <div class="metric"><div class="metric-val" style="color:#E1306C">6</div><div class="metric-lbl">📸 IG</div></div>
+        <div class="metric"><div class="metric-val" style="color:var(--accent-teal)">9</div><div class="metric-lbl">📁 Drive</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATUS LIST -->
+  <div class="section">
+    <div class="section-label">06 — Task Status List (ตัวอย่าง PyL.A.D.)</div>
+    <div>
+      <div class="status-row">
+        <div class="status-icon" style="background:#2dd4a8"></div>
+        <span class="t-body" style="flex:1">1234567890 — Biden_Speech_Trim</span>
+        <span class="badge badge-teal">🟢 Done</span>
+      </div>
+      <div class="status-row" style="border-color:var(--accent-blue);">
+        <div class="status-icon" style="background:var(--accent-blue); box-shadow:0 0 6px var(--accent-blue)"></div>
+        <span class="t-body" style="flex:1">RC2024ABCD — Harris_Rally_Multi</span>
+        <span class="badge badge-blue">🔥 Cutting...</span>
+      </div>
+      <div class="status-row">
+        <div class="status-icon" style="background:var(--accent-yellow)"></div>
+        <span class="t-body" style="flex:1">987654321 — Trump_Speech_None</span>
+        <span class="badge badge-yellow">🟡 Ready</span>
+      </div>
+      <div class="status-row">
+        <div class="status-icon" style="background:var(--accent-red)"></div>
+        <span class="t-body" style="flex:1">RW2024WXYZ — Protest_Footage</span>
+        <span class="badge badge-red">🔴 Waiting</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIDEBAR PREVIEW -->
+  <div class="section">
+    <div class="section-label">07 — Sidebar Navigation</div>
+    <div class="card" style="max-width:220px; padding:12px;">
+      <div class="t-muted" style="margin-bottom:10px; padding:0 4px">TOOLS</div>
+      <div class="nav-item active">
+        <div class="nav-dot" style="background:var(--accent-teal)"></div>
+        🧠 PyS.A.R.N.
+      </div>
+      <div class="nav-item" style="margin-top:4px">
+        <div class="nav-dot" style="background:var(--text-3)"></div>
+        🎬 PyL.A.D.
+      </div>
+      <div class="nav-item" style="margin-top:4px">
+        <div class="nav-dot" style="background:var(--text-3)"></div>
+        📋 PyJ.I.T.
+      </div>
+    </div>
+  </div>
+
+  <!-- CSS VARIABLES SNIPPET -->
+  <div class="section">
+    <div class="section-label">08 — CSS Block ที่จะใส่ในโค้ด (ก๊อปวางต้นไฟล์)</div>
+    <div class="code-block">
+<span class="cm"># ใส่หลัง st.set_page_config()</span><br>
+<span class="kw">st</span>.markdown(<span class="str">"""&lt;style&gt;<br>
+@import url('https://fonts.googleapis.com/css2?<br>
+  family=JetBrains+Mono:wght@400;600<br>
+  &family=Syne:wght@400;600;800&display=swap');<br>
+<br>
+:root {<br>
+  --bg0:#0d0f12; --bg1:#13161b; --bg2:#1a1e26;<br>
+  --accent-blue:#4a9eff; --accent-teal:#2dd4a8;<br>
+  --accent-orange:#ff7a2f; --accent-red:#ff4d4d;<br>
+  --text-1:#e8eaf0; --text-2:#8b90a0;<br>
+  --font-d:'Syne',sans-serif;<br>
+  --font-m:'JetBrains Mono',monospace;<br>
+}<br>
+<br>
+[data-testid="stAppViewContainer"] {<br>
+  background: var(--bg0) !important;<br>
+}<br>
+... (ดูโค้ดเต็มในไฟล์ที่แก้แล้ว)<br>
+&lt;/style&gt;"""</span>, unsafe_allow_html=<span class="kw">True</span>)
+    </div>
+  </div>
+
+  <div class="divider"></div>
+  <div class="t-muted" style="text-align:center">LoadPAP Dark Design System · ใช้ได้ทั้ง PyS.A.R.N. · PyL.A.D. · PyJ.I.T. · Main.py</div>
+</div>

@@ -1,0 +1,15 @@
+[theme]
+base = "dark"
+
+# Background
+backgroundColor = "#0d0f12"
+secondaryBackgroundColor = "#1a1e26"
+
+# Text
+textColor = "#e8eaf0"
+
+# Accent (ปุ่ม primary, slider, checkbox)
+primaryColor = "#4a9eff"
+
+# Font — streamlit รองรับ "sans serif" | "serif" | "monospace"
+font = "sans serif"
