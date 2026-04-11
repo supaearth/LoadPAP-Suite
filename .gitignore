@@ -1,0 +1,33 @@
+# ============================================================
+#  LoadPAP Family — .gitignore
+#  ไฟล์เหล่านี้อยู่แค่ในเครื่อง ไม่ขึ้น GitHub เด็ดขาด
+# ============================================================
+
+# --- ข้อมูลส่วนตัว (ห้าม push เด็ดขาด) ---
+credentials.json
+vmaster_config.json
+token.pickle
+
+# --- Python cache ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# --- Mac system files ---
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- Environment ---
+.env
+.venv
+venv/
+env/
+
+# --- Logs ---
+*.log
+
+# --- ไฟล์ temp ที่โปรแกรมสร้าง ---
+*.tmp
