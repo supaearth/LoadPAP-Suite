@@ -20,19 +20,26 @@
 ### 1. ติดตั้ง Python
 ดาวน์โหลดที่ [python.org](https://www.python.org/downloads/) → ติดตั้งตามปกติ
 
-### 2. Clone repo นี้
+### 2. ดาวน์โหลดโปรแกรม
+กดปุ่ม **Code → Download ZIP** แล้วแตกไฟล์ หรือถ้ามี Git:
 ```bash
-git clone [repo-url]
-cd loadpap
+git clone https://github.com/supaearth/LoadPAP-Family.git
 ```
 
 ### 3. เตรียมไฟล์ config
-```bash
-cp vmaster_config.template.json vmaster_config.json
-```
-แล้ววาง `credentials.json` (รับจากผู้ดูแลโปรแกรม) ลงใน folder เดียวกัน
+- เข้าไปใน folder LoadPAP
+- คลิกขวาที่ `vmaster_config.template.json` → **Duplicate**
+- เปลี่ยนชื่อเป็น `vmaster_config.json`
+- วาง `credentials.json` (รับจากผู้ดูแลโปรแกรม) ลงใน folder เดียวกัน
 
-### 4. ดับเบิลคลิก `INSTALL.command`
+### 4. รับ Gemini API Key (ของตัวเอง ฟรี)
+1. เข้า [aistudio.google.com](https://aistudio.google.com)
+2. Sign in ด้วย Google Account
+3. กด **Get API Key** → **Create API key**
+4. Copy key ที่ได้ไว้ก่อน
+5. เปิดโปรแกรมแล้วใส่ key ในหน้า Main → **Gemini API Keys**
+
+### 5. ดับเบิลคลิก `INSTALL.command`
 รอจนเสร็จ (ประมาณ 2-5 นาที)
 
 ---
@@ -46,20 +53,6 @@ cp vmaster_config.template.json vmaster_config.json
 ## อัพเดทโปรแกรม
 
 **ดับเบิลคลิก `UPDATE.command`**
-
-หรือรันเองใน Terminal:
-```bash
-git pull
-```
-
----
-
-## โครงสร้าง Branch
-
-| Branch | ใช้สำหรับ |
-|---|---|
-| `main` | โค้ดเสถียร สำหรับผู้ใช้งาน |
-| `dev` | พัฒนาและทดสอบ feature ใหม่ |
 
 ---
 
