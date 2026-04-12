@@ -72,7 +72,7 @@ Return ONLY a JSON object: {"summary": "...", "person_name": "...", "confidence_
 # ==========================================
 # 🖥️ UI
 # ==========================================
-st.set_page_config(page_title="PyJ.I.T. — AI Logger", layout="wide")
+st.set_page_config(page_title="PyLOG — AI Logger", layout="wide")
 
 inject_global_css()
 
@@ -143,7 +143,7 @@ with st.sidebar:
       border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:16px;">
       <div style="width:8px;height:8px;border-radius:50%;background:#ff7a2f;flex-shrink:0;"></div>
       <div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-sm);font-weight:600;color:#e8eaf0;">PyJ.I.T.</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-sm);font-weight:600;color:#e8eaf0;">PyLOG</div>
         <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;letter-spacing:.06em;">AI FOOTAGE LOGGER</div>
       </div>
     </div>
@@ -176,7 +176,7 @@ st.markdown("""
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
   <div style="font-size:var(--fs-stat);">📋</div>
   <div>
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-xl);font-weight:700;color:#e8eaf0;line-height:1.1;">PyJ.I.T.</div>
+    <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-xl);font-weight:700;color:#e8eaf0;line-height:1.1;">PyLOG</div>
     <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;margin-top:2px;letter-spacing:.04em;">AI FOOTAGE LOGGER — GEMINI VISION</div>
   </div>
 </div>

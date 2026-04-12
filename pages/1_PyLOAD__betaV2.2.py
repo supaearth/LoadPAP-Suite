@@ -293,7 +293,7 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
 # 🖥️ 3. UI & SETTINGS
 # ==========================================
 
-st.set_page_config(page_title="PyS.A.R.N. — Footage Downloader", layout="wide")
+st.set_page_config(page_title="PyLOAD — Footage Downloader", layout="wide")
 
 # ============================================================
 # 🎨 CSS
@@ -367,7 +367,7 @@ with st.sidebar:
       border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:14px;">
       <div style="width:8px;height:8px;border-radius:50%;background:#4a9eff;flex-shrink:0;"></div>
       <div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-sm);font-weight:600;color:#e8eaf0;">PyS.A.R.N.</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-sm);font-weight:600;color:#e8eaf0;">PyLOAD</div>
         <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;letter-spacing:.06em;">FOOTAGE DOWNLOADER</div>
       </div>
     </div>""", unsafe_allow_html=True)
@@ -513,7 +513,7 @@ st.markdown("""
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
   <div style="font-size:var(--fs-xl);">🧠</div>
   <div>
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-xl);font-weight:700;color:#e8eaf0;line-height:1.1;">PyS.A.R.N.</div>
+    <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-xl);font-weight:700;color:#e8eaf0;line-height:1.1;">PyLOAD</div>
     <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;margin-top:2px;letter-spacing:.04em;">FOOTAGE DOWNLOADER — BETA 1.2</div>
   </div>
 </div>

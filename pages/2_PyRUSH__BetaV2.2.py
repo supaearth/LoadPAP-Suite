@@ -253,7 +253,7 @@ def check_status(video_id, new_name=None):
     return "waiting"
 
 
-st.set_page_config(page_title="PyL.A.D. — Auto Cutter", layout="wide")
+st.set_page_config(page_title="PyRUSH — Auto Cutter", layout="wide")
 
 # ============================================================
 # 🎨 CSS
@@ -326,7 +326,7 @@ with st.sidebar:
       border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:14px;">
       <div style="width:8px;height:8px;border-radius:50%;background:#2dd4a8;flex-shrink:0;"></div>
       <div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-sm);font-weight:600;color:#e8eaf0;">PyL.A.D.</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-sm);font-weight:600;color:#e8eaf0;">PyRUSH</div>
         <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;letter-spacing:.06em;">AUTO VIDEO CUTTER</div>
       </div>
     </div>""", unsafe_allow_html=True)
@@ -372,9 +372,9 @@ with st.sidebar:
 # ============================================================
 st.markdown("""
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
-  <div style="font-size:var(--fs-hero);">🎬</div>
+  <div style="font-size:var(--fs-hero);">⚡️</div>
   <div>
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-hero);font-weight:700;color:#e8eaf0;line-height:1.1;">PyL.A.D.</div>
+    <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-hero);font-weight:700;color:#e8eaf0;line-height:1.1;">PyRUSH</div>
     <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-sm);color:#555a6a;margin-top:2px;letter-spacing:.04em;">AUTO VIDEO CUTTER — FFMPEG ENGINE</div>
   </div>
 </div>
@@ -385,7 +385,7 @@ st.markdown("""
 if 'watchdog_on' not in st.session_state:
     st.session_state.watchdog_on = False
 
-_, _wdc = st.columns([9, 1])
+_, _wdc = st.columns([8, 1])
 with _wdc:
     _wd_on = st.toggle("🤖 Watchdog", value=st.session_state.watchdog_on, key="wd_toggle")
     st.session_state.watchdog_on = _wd_on

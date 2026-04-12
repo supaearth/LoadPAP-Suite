@@ -219,7 +219,7 @@ with col1:
     st.markdown("""
     <div class="lp-tool-card blue">
       <span class="lp-tool-icon">🧠</span>
-      <div class="lp-tool-name" style="color:#4a9eff;">PyS.A.R.N.</div>
+      <div class="lp-tool-name" style="color:#4a9eff;">PyLOAD</div>
       <div class="lp-tool-title">ระบบดาวน์โหลดฟุตเทจ</div>
       <div class="lp-tool-desc">
         สแกน Google Doc แล้วดึงฟุตเทจอัตโนมัติจากทุกแหล่ง — Getty, Reuters, YouTube, TikTok, Facebook, Instagram และ Google Drive
@@ -238,7 +238,7 @@ with col2:
     st.markdown("""
     <div class="lp-tool-card teal">
       <span class="lp-tool-icon">🎬</span>
-      <div class="lp-tool-name" style="color:#2dd4a8;">PyL.A.D.</div>
+      <div class="lp-tool-name" style="color:#2dd4a8;">PyRUSH</div>
       <div class="lp-tool-title">ระบบตัดต่ออัตโนมัติ</div>
       <div class="lp-tool-desc">
         อ่าน Google Sheet แล้วสั่ง FFmpeg ตัดวิดีโอตาม Timecode อัตโนมัติ รองรับ Trim, Multi-cut และ Auto-5s
@@ -256,7 +256,7 @@ with col3:
     st.markdown("""
     <div class="lp-tool-card orange">
       <span class="lp-tool-icon">📋</span>
-      <div class="lp-tool-name" style="color:#ff7a2f;">PyJ.I.T.</div>
+      <div class="lp-tool-name" style="color:#ff7a2f;">PyLOG</div>
       <div class="lp-tool-title">ระบบบันทึก Log ด้วย AI</div>
       <div class="lp-tool-desc">
         สแกนไฟล์วิดีโอในโฟลเดอร์ วิเคราะห์ภาพนิ่งด้วย Gemini Vision แล้วบันทึกชื่อบุคคล
