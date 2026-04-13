@@ -6,7 +6,7 @@ if ROOT_DIR not in sys.path:
 from utils import load_config, save_config, inject_global_css
 
 st.set_page_config(
-    page_title="LoadPAP Family",
+    page_title="LoadPAP Suite",
     page_icon="🚀",
     layout="wide"
 )
@@ -178,7 +178,7 @@ st.markdown("""
   </div>
   <div>
     <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:26px; font-weight:800; color:#e8eaf0; line-height:1.1;">
-      LoadPAP Family
+      LoadPAP Suite
     </div>
     <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#555a6a; margin-top:2px; letter-spacing:0.06em;">
       LOAD PROCESS AUTOMATION PIPELINE · v2.0
@@ -490,7 +490,7 @@ st.markdown("""
 <div style="height:1px; background:rgba(255,255,255,0.08); margin:32px 0 16px 0;"></div>
 <div style="display:flex; justify-content:space-between; align-items:center;">
   <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#555a6a;">
-    LoadPAP Family · พัฒนาเพื่อลด Man-hours และ Human Error
+    LoadPAP Suite · พัฒนาเพื่อลด Man-hours และ Human Error
   </div>
   <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#555a6a;">
     macOS · Streamlit · Python

@@ -1,4 +1,4 @@
-# LoadPAP Family
+# LoadPAP Suite
 
 **Load Process Automation Pipeline** — ระบบอัตโนมัติสำหรับ workflow การผลิตวิดีโอ
 
