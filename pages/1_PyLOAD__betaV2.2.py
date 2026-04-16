@@ -6,7 +6,8 @@ import html as _html
 import concurrent.futures
 import streamlit.components.v1 as components
 from googleapiclient.http import MediaIoBaseDownload
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import subprocess
 import urllib.request
 import time
