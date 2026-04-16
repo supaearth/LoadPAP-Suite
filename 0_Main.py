@@ -167,37 +167,65 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 🏠 HEADER
+# 🏠 HEADER  (แทนที่ st.markdown header เดิมทั้งก้อน)
 # ============================================================
-st.markdown("""
-<div style="display:flex; align-items:center; gap:14px; margin-bottom:8px;">
-  <div style="width:50px; height:50px; background:linear-gradient(135deg,#4a9eff,#2dd4a8,#ff7a2f);
-    border-radius:11px; display:flex; align-items:center; justify-content:center;
-    font-family:'IBM Plex Mono',monospace; font-size:17px; font-weight:700; color:#fff; flex-shrink:0;">
-    LPF
-  </div>
-  <div>
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:26px; font-weight:800; color:#e8eaf0; line-height:1.1;">
-      LoadPAP Suite
-    </div>
-    <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#555a6a; margin-top:2px; letter-spacing:0.06em;">
-      LOAD PROCESS AUTOMATION PIPELINE · v2.0
-    </div>
-  </div>
-  <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-    <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px;
-      background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
-      Beta
-    </span>
-    <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px;
-      background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
-      Mac Only
-    </span>
-  </div>
-</div>
+from utils import get_logged_in_email, logout_google
 
-<div style="height:1px; background:rgba(255,255,255,0.08); margin:20px 0 28px 0;"></div>
-""", unsafe_allow_html=True)
+_email = get_logged_in_email()
+
+# ── header row ──
+hdr_left, hdr_right = st.columns([1, 1], gap="small")
+
+with hdr_left:
+    st.markdown("""
+    <div style="display:flex; align-items:center; gap:14px; margin-bottom:8px;">
+      <div style="width:50px; height:50px; background:linear-gradient(135deg,#4a9eff,#2dd4a8,#ff7a2f);
+        border-radius:11px; display:flex; align-items:center; justify-content:center;
+        font-family:'IBM Plex Mono',monospace; font-size:17px; font-weight:700; color:#fff; flex-shrink:0;">
+        LPF
+      </div>
+      <div>
+        <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:26px; font-weight:800; color:#e8eaf0; line-height:1.1;">
+          LoadPAP Suite
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#555a6a; margin-top:2px; letter-spacing:0.06em;">
+          LOAD PROCESS AUTOMATION PIPELINE · v2.0
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with hdr_right:
+    badge_html = """
+    <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end; padding-top:8px;">
+      <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px;
+        background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
+        Beta
+      </span>
+      <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px;
+        background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
+        Mac Only
+      </span>
+    """
+    if _email:
+        badge_html += f"""
+      <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; padding:4px 10px;
+        background:rgba(74,158,255,0.10); border-radius:20px; color:#4a9eff;
+        border:1px solid rgba(74,158,255,0.25); display:inline-flex; align-items:center; gap:6px;">
+        <span style="font-size:9px;">●</span>{_email}
+      </span>
+    """
+    else:
+        badge_html += """
+      <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; padding:4px 10px;
+        background:rgba(255,122,47,0.10); border-radius:20px; color:#ff7a2f;
+        border:1px solid rgba(255,122,47,0.25);">
+        ⚠ ยังไม่ได้ Login
+      </span>
+    """
+    badge_html += "</div>"
+    st.markdown(badge_html, unsafe_allow_html=True)
+st.markdown('<div style="height:1px; background:rgba(255,255,255,0.08); margin:20px 0 28px 0;"></div>', unsafe_allow_html=True)
 
 # ============================================================
 # 📋 INTRO

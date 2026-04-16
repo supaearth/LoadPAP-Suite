@@ -30,6 +30,8 @@ CONFIG_FILE      = os.path.join(ROOT_DIR, "vmaster_config.json")
 # ==========================================
 # SCOPES รวมสิทธิ์ทั้งหมดที่ทุก Page ต้องการ
 SCOPES = [
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/documents.readonly',
     'https://www.googleapis.com/auth/drive.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
@@ -114,6 +116,38 @@ def get_sheets_service():
 def get_g_services():
     """คืน (docs_service, drive_service) — ใช้สำหรับ PyS.A.R.N."""
     return get_docs_service(), get_drive_service()
+
+def get_logged_in_email() -> str | None:
+    """คืน email ของ Google account ที่ login อยู่ — None ถ้ายังไม่ได้ login"""
+    try:
+        import requests as _req
+        creds = get_g_creds()
+        if not creds or not creds.valid:
+            return None
+        resp = _req.get(
+            'https://www.googleapis.com/oauth2/v3/userinfo',
+            headers={'Authorization': f'Bearer {creds.token}'},
+            timeout=5
+        )
+        if resp.status_code == 200:
+            return resp.json().get('email')
+    except Exception:
+        pass
+    return None
+
+
+def logout_google():
+    """ลบ token.pickle เพื่อบังคับ login ใหม่ครั้งถัดไป"""
+    global _creds_cache, _services_cache
+    _creds_cache = None
+    _services_cache = {}
+    try:
+        if os.path.exists(TOKEN_FILE):
+            os.remove(TOKEN_FILE)
+            return True
+    except Exception:
+        pass
+    return False
 
 # ==========================================
 # 🛠️ UTILITY FUNCTIONS
