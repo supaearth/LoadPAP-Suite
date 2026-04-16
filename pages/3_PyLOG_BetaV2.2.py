@@ -21,23 +21,121 @@ from utils import get_g_creds, select_folder_mac, load_config, inject_global_css
 def analyze_video_with_gemini(video_path, gemini_key):
     import re
     if not gemini_key or len(gemini_key) < 20:
-        return {"person_name": "Unknown", "confidence_score": 0, "summary": "Key ผิด"}
-    temp_img_path = f"temp_{int(time.time())}.jpg"
+        return {"person_name": "Unknown (Error)", "confidence_score": 0.0, "summary": "❌ Gemini Key ไม่ถูกต้องหรือยังไม่ได้ตั้งค่า"}
+    ts             = int(time.time())
+    temp_img_path  = f"temp_{ts}_1.jpg"
+    temp_img_path2 = f"temp_{ts}_2.jpg"
+    temp_cover     = f"temp_{ts}_cover.jpg"
     try:
+        fname       = os.path.basename(video_path)
+        fname_lower = fname.lower()
+        is_reuters  = "rtrwnev" in fname_lower or "_rtr" in fname_lower
+        is_getty    = "gettyimages" in fname_lower or fname_lower.startswith("gettyimages-")
+
+        # ดึง story slug จากชื่อไฟล์ Reuters เช่น "IRAN-CRISIS-MOJTABA-ANALYST"
+        reuters_slug = ""
+        if is_reuters:
+            import re as _re
+            slug_match = _re.search(r'_C_\d+-(.+?)\.\w+$', fname, _re.IGNORECASE)
+            if slug_match:
+                reuters_slug = slug_match.group(1).replace("-", " ")
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened(): raise Exception("ไฟล์วิดีโอพัง หรืออ่านไม่ได้")
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 60)
-        success, frame = cap.read()
+
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps          = cap.get(cv2.CAP_PROP_FPS) or 25
+        duration_sec = total_frames / fps
+        skip_frames  = int(fps * 7)  # ข้ามภาพปก 5 วิ + buffer 2 วิ
+
+        # ── Reuters: แคปปก 5 วิแรกเพื่อดึง context ──
+        cover_bytes = None
+        if is_reuters:
+            cover_frame = int(fps * 2.5)  # วินาทีที่ 2.5 อยู่ในปก
+            cap.set(cv2.CAP_PROP_POS_FRAMES, cover_frame)
+            ok_cover, frame_cover = cap.read()
+            if ok_cover:
+                cv2.imwrite(temp_cover, frame_cover)
+                with open(temp_cover, 'rb') as f:
+                    cover_bytes = f.read()
+
+        # ── Frame 1 — ถ้าคลิปสั้นกว่า skip ให้ใช้กลางคลิปแทน ──
+        if total_frames <= skip_frames:
+            f1 = int(total_frames * 0.5)
+        else:
+            f1 = int(skip_frames + (total_frames - skip_frames) * 0.30)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(f1, 0))
+        success1, frame1 = cap.read()
+        if not success1: raise Exception("แคปภาพนิ่งจากวิดีโอไม่ได้")
+        cv2.imwrite(temp_img_path, frame1)
+
+        # ── Frame 2 — เฉพาะคลิปยาวกว่า 60 วิ ──
+        use_two_frames = duration_sec > 60
+        if use_two_frames:
+            f2 = int(skip_frames + (total_frames - skip_frames) * 0.70)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, f2)
+            success2, frame2 = cap.read()
+            if success2:
+                cv2.imwrite(temp_img_path2, frame2)
+            else:
+                use_two_frames = False
+
         cap.release()
-        if not success: raise Exception("แคปภาพนิ่งจากวิดีโอไม่ได้")
-        cv2.imwrite(temp_img_path, frame)
+
         client = genai.Client(api_key=gemini_key)
-        prompt = """Analyze this image from a video.
-1. Identify the main person (if famous). If not sure, say 'Unknown Person'.
-2. Briefly summarize what is happening in Thai.
-Return ONLY a JSON object: {"summary": "...", "person_name": "...", "confidence_score": 0.xx}"""
+
+        # ── สร้าง prompt ตาม source ──
+        if is_reuters and cover_bytes:
+            frame_desc  = "2 content frames" if use_two_frames else "1 content frame"
+            slug_hint   = f'Story slug: "{reuters_slug}"\n' if reuters_slug else ""
+            prompt = f"""{slug_hint}You are given a Reuters cover/slate frame followed by {frame_desc} from the same video.
+Use the cover frame to understand the story context (it may contain text, title, or location info).
+Then analyze the content frame(s) to identify the most prominent person and summarize what is happening.
+Focus on Thai public figures, politicians, celebrities, or well-known international figures. If unsure, use "Unknown Person".
+Summarize in Thai, in 1-2 sentences.
+
+Return ONLY a valid JSON object in this exact format:
+{{"summary": "...", "person_name": "...", "confidence_score": 0.xx}}
+
+- confidence_score: your confidence in identifying the person (0.0–1.0)
+- Do not include any text outside the JSON object."""
+        elif use_two_frames:
+            filename_hint = f'Filename hint: "{fname}"\n' if not is_getty else ""
+            prompt = f"""{filename_hint}You are given 2 frames sampled from different parts of a video.
+Analyze across both frames to identify the most prominent person and summarize the overall content.
+Focus on Thai public figures, politicians, celebrities, or well-known international figures. If unsure, use "Unknown Person".
+Summarize what is happening in Thai, in 1-2 sentences covering the overall content.
+
+Return ONLY a valid JSON object in this exact format:
+{{"summary": "...", "person_name": "...", "confidence_score": 0.xx}}
+
+- confidence_score: your confidence in identifying the person (0.0–1.0)
+- Do not include any text outside the JSON object."""
+        else:
+            filename_hint = f'Filename hint: "{fname}"\n' if not is_getty else ""
+            prompt = f"""{filename_hint}Analyze this image from a video.
+1. Identify the most prominent person visible. Focus on Thai public figures, politicians, celebrities, or well-known international figures. If unsure, use "Unknown Person".
+2. Summarize what is happening in this scene in Thai, in 1-2 sentences.
+
+Return ONLY a valid JSON object in this exact format:
+{{"summary": "...", "person_name": "...", "confidence_score": 0.xx}}
+
+- confidence_score: your confidence in identifying the person (0.0–1.0)
+- Do not include any text outside the JSON object."""
+
+        # ── สร้าง contents ──
         with open(temp_img_path, 'rb') as f:
             image_bytes = f.read()
+
+        contents = [prompt]
+        if is_reuters and cover_bytes:
+            contents.append(types.Part.from_bytes(data=cover_bytes, mime_type="image/jpeg"))
+        contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
+        if use_two_frames and os.path.exists(temp_img_path2):
+            with open(temp_img_path2, 'rb') as f:
+                image_bytes2 = f.read()
+            contents.append(types.Part.from_bytes(data=image_bytes2, mime_type="image/jpeg"))
+
         MODELS = ["gemini-3.1-flash-lite-preview", "gemini-2.5-flash-lite"]
         response = None
         for model_name in MODELS:
@@ -45,7 +143,7 @@ Return ONLY a JSON object: {"summary": "...", "person_name": "...", "confidence_
                 try:
                     response = client.models.generate_content(
                         model=model_name,
-                        contents=[prompt, types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")]
+                        contents=contents
                     )
                     break
                 except Exception as e:
@@ -58,16 +156,18 @@ Return ONLY a JSON object: {"summary": "...", "person_name": "...", "confidence_
                 break
         if response is None:
             raise Exception("ทุก model แน่นหมด")
-        match = __import__('re').search(r'\{.*\}', response.text, __import__('re').DOTALL)
+        match = re.search(r'\{[^{}]*\}', response.text, re.DOTALL)
         if match:
             ai_data = json.loads(match.group(0))
         else:
             raise Exception(f"AI ไม่ส่ง JSON: {response.text[:200]}")
-        if os.path.exists(temp_img_path): os.remove(temp_img_path)
+        for p in [temp_img_path, temp_img_path2, temp_cover]:
+            if os.path.exists(p): os.remove(p)
         return ai_data
     except Exception as e:
-        if os.path.exists(temp_img_path): os.remove(temp_img_path)
-        return {"person_name": "Unknown (Error)", "confidence_score": 0, "summary": f"พังเพราะ: {str(e)}"}
+        for p in [temp_img_path, temp_img_path2, temp_cover]:
+            if os.path.exists(p): os.remove(p)
+        return {"person_name": "Unknown (Error)", "confidence_score": 0.0, "summary": f"❌ พังเพราะ: {str(e)}"}
 
 # ==========================================
 # 🖥️ UI

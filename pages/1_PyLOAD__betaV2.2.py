@@ -2,6 +2,7 @@ import sys
 import os
 import streamlit as st
 import re, datetime, yt_dlp, json, pandas as pd, io, shutil
+import html as _html
 import concurrent.futures
 import streamlit.components.v1 as components
 from googleapiclient.http import MediaIoBaseDownload
@@ -416,8 +417,8 @@ with st.sidebar:
                     st.session_state['safe_ep_name'] = ep_string
                     st.session_state['parsed_doc_url'] = st.session_state['safe_doc_url']
                     st.rerun()
-            except:
-                st.warning("⚠️ ไม่สามารถอ่านชื่อเอกสารได้")
+            except Exception as _e:
+                st.warning(f"⚠️ ไม่สามารถอ่านชื่อเอกสารได้: {_e}")
                 st.session_state['parsed_doc_url'] = st.session_state['safe_doc_url']
 
     saved_archive_url = app_config.get('archive_url', '')
@@ -628,15 +629,18 @@ if st.session_state.get('triggered'):
                                     reuters_codes = re.findall(r'\b(?:RW|RC)[A-Z0-9]+\b', text_no_urls, re.IGNORECASE)
                                     data['reuters'].extend([r.upper() for r in reuters_codes])
                                     
-                                    # 💡 ขั้นที่ 4: ลบรหัส Reuters ทิ้งออกจากข้อความไปเลย! (กันบอท Getty ไปสอยตัวเลขจาก Reuters มา)
+                                    # 💡 ขั้นที่ 4: ลบรหัส Reuters ทิ้ง
                                     for rc in reuters_codes:
-                                        text_no_urls = text_no_urls.replace(rc, ' ')
-                                        
-                                    # 💡 ขั้นที่ 5: ค่อยดึง Getty (อัปเกรดให้รู้จัก mr_1234, 210-9, และตัวเลข 8-12 หลัก)
-                                    # (?i) = ไม่สนพิมพ์เล็กพิมพ์ใหญ่
-                                    # \b = ตัดคำให้เป๊ะ ไม่ไปหยิบเลขมั่วๆ ที่ติดกับคำอื่น
-                                    getty_codes = re.findall(r'(?i)\b(mr_\d+|\d{2,5}-\d{1,5}|\d{8,12})\b', text_no_urls)
-                                    data['getty'].extend(getty_codes)
+                                         text_no_urls = text_no_urls.replace(rc, ' ')
+                                    
+                                    # 💡 ขั้นที่ 5: ดึง Getty — กรองทีละบรรทัด
+                                    # บรรทัดไหนมี http หรือ : → ข้ามเลย (มั่วแน่ๆ)
+                                    for line in text_no_urls.splitlines():
+                                        line = line.strip()
+                                        if not line: continue
+                                        if re.search(r'https?://|:', line): continue
+                                        getty_codes = re.findall(r'(?i)\b(mr_\d+|\d{2,5}-\d{1,5}|\d{8,12})\b', line)
+                                        data['getty'].extend(getty_codes)
 
                 for k in data: data[k] = list(set([str(x).strip() for x in data[k] if x]))
                 st.session_state['data_cache'] = data
@@ -730,9 +734,13 @@ if st.session_state.get('triggered'):
                                 req = drive_service.files().get_media(fileId=f_info['id'])
                                 fname = sanitize_filename(f_info['name'])
                                 source_key = 'getty' if code in raw_data['getty'] else 'reuters'
-                                name_part, ext_part = os.path.splitext(fname)
-                                with io.FileIO(os.path.join(get_dest(fname, source_key), f"{name_part}_DriveArchive{ext_part}"), 'wb') as fh:
-                                    MediaIoBaseDownload(fh, req).next_chunk()
+                                dest_path = os.path.join(get_dest(fname, source_key), fname)
+                                with io.FileIO(dest_path, 'wb') as fh:
+                                    downloader = MediaIoBaseDownload(fh, req)
+                                    done = False
+                                    while not done:
+                                          _, done = downloader.next_chunk()
+                                
                             except: pass
                     
                     if raw_data['drive_ids']:
@@ -889,37 +897,80 @@ if st.session_state.get('triggered'):
 
                 with _col_g:
                     new_getty = [c for c in raw_data['getty'] if c not in st.session_state['duplicates']['getty']]
-                    miss_badge_g = f'<span class="sarn-badge sb-red">{len(new_getty)} ต้องโหลด</span>' if new_getty else '<span class="sarn-badge sb-teal">ครบแล้ว</span>'
-                    codes_g = '<br>'.join(new_getty)
-                    body_g = (f'<div class="sarn-code-box">{codes_g}</div>' if new_getty else
-                              '<div style="background:rgba(45,212,168,.06);border:1px solid rgba(45,212,168,.2);border-radius:7px;padding:10px;text-align:center;margin-bottom:10px;">'
-                              '<span style="font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#2dd4a8;">✅ มีไฟล์ Getty ครบหมดแล้ว</span></div>')
+
+                    # ✅ เรียง: ID ยาว / mr_ ก่อน → dash-code ท้าย
+                    _dash_set_g = set(c for c in new_getty if re.match(r'^\d{2,5}-\d{1,7}$', c))
+                    new_getty_main = [c for c in new_getty if c not in _dash_set_g]
+                    new_getty_dash = [c for c in new_getty if c in _dash_set_g]
+                    new_getty_sorted = new_getty_main + new_getty_dash
+
+                    miss_badge_g = (f'<span class="sarn-badge sb-red">{len(new_getty_sorted)} ต้องโหลด</span>'
+                                    if new_getty_sorted else '<span class="sarn-badge sb-teal">ครบแล้ว</span>')
+
+                    # ✅ Copy All — ใช้ st.code (มีปุ่ม copy built-in)
+                    import json as _json
+
+                    _rows_g = "".join(
+                        f'<div style="font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#e8eaf0;padding:2px 0;">{c}</div>'
+                        for c in new_getty_main
+                    )
+                    if new_getty_dash:
+                        _rows_g += '<div style="height:1px;background:rgba(255,255,255,0.07);margin:6px 0;"></div>'
+                        _rows_g += "".join(
+                            f'<div style="font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#8b90a0;padding:2px 0;">'
+                            f'{c} <span style="font-size:10px;color:#555a6a;margin-left:4px;">short</span></div>'
+                            for c in new_getty_dash
+                        )
+
                     st.markdown(
                         f'<div class="sarn-code-card sarn-code-card-blue">'
                         f'<div class="sarn-code-title">🔵 Getty Images {miss_badge_g}</div>'
-                        f'{body_g}</div>',
+                        f'</div>',
                         unsafe_allow_html=True
                     )
-                    if new_getty:
-                        getty_urls = [f"https://www.gettyimages.com/search/2/film?phrase={code}&family=editorial&sort=best" for code in new_getty]
-                        make_open_ci_button(getty_urls, f"🔗 เปิด Tab Getty ทั้งหมด ({len(new_getty)} แท็บ)", "#4a9eff", full_project_name)
+                    if new_getty_sorted:
+                        st.code("\n".join(new_getty_sorted), language="text")
+                    else:
+                        st.markdown(
+                            '<div style="background:rgba(45,212,168,.06);border:1px solid rgba(45,212,168,.2);'
+                            'border-radius:7px;padding:10px;text-align:center;margin-bottom:10px;">'
+                            '<span style="font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#2dd4a8;">'
+                            '✅ มีไฟล์ Getty ครบหมดแล้ว</span></div>',
+                            unsafe_allow_html=True
+                        )
+                    if new_getty_sorted:
+                        getty_urls = [f"https://www.gettyimages.com/search/2/film?phrase={code}&family=editorial&sort=best" for code in new_getty_sorted]
+                        make_open_ci_button(getty_urls, "🔗 เปิด Tab Getty ทั้งหมด", "#4a9eff", full_project_name)
                     if st.session_state['duplicates']['getty']:
                         st.markdown(_found_html(st.session_state['duplicates']['getty'], '#4a9eff',
                             st.session_state['found_in_local'], st.session_state['found_in_archive']), unsafe_allow_html=True)
 
                 with _col_r:
                     new_reuters = [c for c in raw_data['reuters'] if c not in st.session_state['duplicates']['reuters']]
-                    miss_badge_r = f'<span class="sarn-badge sb-red">{len(new_reuters)} ต้องโหลด</span>' if new_reuters else '<span class="sarn-badge sb-teal">ครบแล้ว</span>'
-                    codes_r = '<br>'.join(new_reuters)
-                    body_r = (f'<div class="sarn-code-box">{codes_r}</div>' if new_reuters else
-                              '<div style="background:rgba(45,212,168,.06);border:1px solid rgba(45,212,168,.2);border-radius:7px;padding:10px;text-align:center;margin-bottom:10px;">'
-                              '<span style="font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#2dd4a8;">✅ มีไฟล์ Reuters ครบหมดแล้ว</span></div>')
+                    miss_badge_r = (f'<span class="sarn-badge sb-red">{len(new_reuters)} ต้องโหลด</span>'
+                                    if new_reuters else '<span class="sarn-badge sb-teal">ครบแล้ว</span>')
+
+                    # ✅ Copy All — ใช้ st.code (มีปุ่ม copy built-in)
+                    _rows_r = "".join(
+                        f'<div style="font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#e8eaf0;padding:2px 0;">{c}</div>'
+                        for c in new_reuters
+                    )
                     st.markdown(
                         f'<div class="sarn-code-card sarn-code-card-orange">'
                         f'<div class="sarn-code-title">🟠 Reuters Connect {miss_badge_r}</div>'
-                        f'{body_r}</div>',
+                        f'</div>',
                         unsafe_allow_html=True
                     )
+                    if new_reuters:
+                        st.code("\n".join(new_reuters), language="text")
+                    else:
+                        st.markdown(
+                            '<div style="background:rgba(45,212,168,.06);border:1px solid rgba(45,212,168,.2);'
+                            'border-radius:7px;padding:10px;text-align:center;margin-bottom:10px;">'
+                            '<span style="font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#2dd4a8;">'
+                            '✅ มีไฟล์ Reuters ครบหมดแล้ว</span></div>',
+                            unsafe_allow_html=True
+                        )
                     if new_reuters:
                         reuters_urls = [f"https://www.reutersconnect.com/all?search=all%3A{code.strip()}" for code in new_reuters]
                         make_open_ci_button(reuters_urls, "เปิด Reuters Connect", "#ff7a2f", full_project_name)

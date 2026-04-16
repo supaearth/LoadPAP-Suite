@@ -226,10 +226,11 @@ with col1:
         โดยไม่ต้องคัดลอกลิงก์ทีละอัน
       </div>
       <div>
-        <span class="lp-badge badge-blue">Getty</span>
-        <span class="lp-badge badge-orange">Reuters</span>
-        <span class="lp-badge badge-teal">Social</span>
-        <span class="lp-badge badge-blue">Drive</span>
+        <span class="lp-badge badge-blue">Key Messages</span>
+        <span class="lp-badge badge-orange">Global Focus</span>
+        <span class="lp-badge badge-teal">News Digest</span>
+        <span class="lp-badge badge-blue">News Moments</span>
+        <span class="lp-badge badge-yellow">The World Dialouge</span>       
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -245,9 +246,7 @@ with col2:
         พร้อมลบ Black/White frame ออกอัตโนมัติ
       </div>
       <div>
-        <span class="lp-badge badge-teal">FFmpeg</span>
-        <span class="lp-badge badge-yellow">Auto-Cut</span>
-        <span class="lp-badge badge-teal">Watchdog</span>
+        <span class="lp-badge badge-teal">Decoding The World</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
