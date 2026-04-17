@@ -634,7 +634,7 @@ with st.container(border=True):
 
     st.markdown(
         "<div style='font-family:IBM Plex Mono,monospace;font-size:10px;color:#555a6a;margin-top:6px;'>"
-        "💡 ทุก account ที่เพิ่มไว้จะถูกใช้ค้นหา Shared Drive พร้อมกันอัตโนมัติ</div>",
+        "💡 PyLOAD จะค้นหา Shared Drive ของ account ที่ Active อยู่เท่านั้น — Switch เพื่อเปลี่ยน</div>",
         unsafe_allow_html=True
     )
 
