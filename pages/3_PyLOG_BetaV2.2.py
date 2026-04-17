@@ -250,7 +250,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:8px;'>1 — โฟลเดอร์วิดีโอ</div>", unsafe_allow_html=True)
-    if st.button("📂 เลือกโฟลเดอร์...", use_container_width=True, disabled=st.session_state.is_running):
+    if st.button("📂 เลือกโฟลเดอร์วิดีโอ", use_container_width=True, disabled=st.session_state.is_running):
         path = select_folder_mac("เลือกโฟลเดอร์ที่มีวิดีโอ")
         if path:
             st.session_state.target_folder = path
@@ -329,12 +329,12 @@ st.markdown(f"""
 # ── Pause / Reset buttons ──
 _, _pc, _rc = st.columns([8.5, 1, 1])
 with _pc:
-    _pause_lbl = "▶ Resume" if st.session_state.is_paused else "⏸ Pause"
+    _pause_lbl = "▶ ต่อ" if st.session_state.is_paused else "⏸ หยุด"
     if st.button(_pause_lbl, key="pause_btn", disabled=(not st.session_state.is_running), use_container_width=True):
         st.session_state.is_paused = not st.session_state.is_paused
         st.rerun()
 with _rc:
-    if st.button("🛑 Reset", key="reset_btn", disabled=(not st.session_state.is_running), use_container_width=True):
+    if st.button("🔄 รีเซ็ต", key="reset_btn", disabled=(not st.session_state.is_running), use_container_width=True):
         st.session_state.is_running  = False
         st.session_state.is_paused   = False
         st.session_state.file_queue  = []

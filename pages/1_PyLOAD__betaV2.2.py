@@ -458,7 +458,7 @@ with st.sidebar:
     st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:5px;'>3 — Destination</div>", unsafe_allow_html=True)
     if 'dest_folder' not in st.session_state or not st.session_state['dest_folder']:
         st.session_state['dest_folder'] = app_config.get('dest_folder', os.path.join(os.getcwd(), "Downloads_Footage"))
-    if st.button("📥 เลือกโฟลเดอร์บันทึก", use_container_width=True):
+    if st.button("📂 เลือกโฟลเดอร์ปลายทาง", use_container_width=True):
         path = select_folder_mac("เลือกโฟลเดอร์สำหรับเซฟงาน")
         if path:
             st.session_state['dest_folder'] = path
@@ -478,7 +478,7 @@ with st.sidebar:
 
     st.divider()
     run_btn = st.button("🚀 เริ่มค้นหาและดาวน์โหลด", use_container_width=True, type="primary")
-    if st.button("🛑 ล้างข้อมูล / Reset แอป", use_container_width=True):
+    if st.button("🔄 ล้างข้อมูล / รีเซ็ต", use_container_width=True):
         for k in ['triggered','run_complete','data_cache','parsed_doc_url','safe_doc_url','safe_ep_name','failed_social_links']:
             if k in st.session_state:
                 st.session_state[k] = False if k in ['triggered','run_complete'] else (None if k=='data_cache' else ([] if k=='failed_social_links' else ''))
