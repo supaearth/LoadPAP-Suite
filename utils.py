@@ -54,8 +54,11 @@ def get_g_creds():
     creds = None
     # ใน utils.py — บรรทัดหลัง โหลด token เก่ามาแล้ว
     if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, 'rb') as token:
-           creds = pickle.load(token)
+        try:
+            with open(TOKEN_FILE, 'rb') as token:
+                creds = pickle.load(token)
+        except Exception:
+            creds = None
 
 # 💡 THE FIX: ถ้า token เก่า SCOPES ไม่ครบ → ล้างทิ้ง บังคับ auth ใหม่
     try:
@@ -203,8 +206,8 @@ def save_config(data: dict):
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"❌ บันทึก config ไม่สำเร็จ: {e}")
 
 # ==========================================
 # 🎨 GLOBAL CSS — typography scale กลาง

@@ -188,11 +188,20 @@ def get_source_tag(url):
 def get_ai_caption(file_path, api_key, source_tag):
     if not api_key or len(api_key) < 20: return None
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        img = Image.open(file_path)
+        from google import genai
+        from google.genai import types
+        import io as _io
+        client = genai.Client(api_key=api_key)
+        with open(file_path, 'rb') as f:
+            img_bytes = f.read()
+        # ตรวจนามสกุลไฟล์ว่าเป็น PNG หรือ JPEG
+        ext = os.path.splitext(file_path)[1].lower()
+        mime = "image/png" if ext == ".png" else "image/jpeg"
         prompt = "Describe this image in a very short, factual English phrase (3-5 words). No spaces, use underscores for spaces. No special characters."
-        response = model.generate_content([prompt, img])
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-lite",
+            contents=[prompt, types.Part.from_bytes(data=img_bytes, mime_type=mime)]
+        )
         caption = sanitize_filename(response.text)
         if not caption or len(caption) < 3: return None
         return f"{caption}_{source_tag}"

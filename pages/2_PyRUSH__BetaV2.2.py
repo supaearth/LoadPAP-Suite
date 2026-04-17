@@ -90,7 +90,7 @@ def get_bad_segments(file_path):
     b_starts = re.findall(r'black_start:\s*([\d.]+)', stderr_black)
     b_ends   = re.findall(r'black_end:\s*([\d.]+)',   stderr_black)
     for i in range(len(b_starts)):
-        e = b_ends[i] if i < len(b_ends) else "99999"
+        e = b_ends[i] if i < len(b_ends) else "99999.0"
         segments.append((float(b_starts[i]), float(e)))
     cmd_white = [FFMPEG_EXE, '-i', file_path, '-vf', 'negate,blackdetect=d=0.05:pic_th=0.98:pix_th=0.10', '-f', 'null', '-']
     res_white_raw = subprocess.run(cmd_white, capture_output=True)
