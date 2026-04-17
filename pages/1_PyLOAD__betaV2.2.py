@@ -645,12 +645,15 @@ if st.session_state.get('triggered'):
                                          text_no_urls = text_no_urls.replace(rc, ' ')
                                     
                                     # 💡 ขั้นที่ 5: ดึง Getty — กรองทีละบรรทัด
-                                    # บรรทัดไหนมี http หรือ : → ข้ามเลย (มั่วแน่ๆ)
+                                    # บรรทัดต้องมีแต่ตัวเลข, -, space, ,; และ mr_ เท่านั้น
                                     for line in text_no_urls.splitlines():
                                         line = line.strip()
                                         if not line: continue
                                         if re.search(r'https?://|:', line): continue
-                                        getty_codes = re.findall(r'(?i)\b(mr_\d+|\d{2,5}-\d{1,5}|\d{8,12})\b', line)
+                                        # ถ้ามีตัวอักษรอื่นที่ไม่ใช่ mr_ → ข้ามบรรทัด
+                                        line_no_mr = re.sub(r'\bmr_', '', line, flags=re.IGNORECASE)
+                                        if re.search(r'[a-zA-Z%@#$&*!?]', line_no_mr): continue
+                                        getty_codes = re.findall(r'(?i)\b(mr_\d+|\d{2,12}-\d{1,5}|\d{8,12})\b', line)
                                         data['getty'].extend(getty_codes)
 
                 for k in data: data[k] = list(set([str(x).strip() for x in data[k] if x]))
