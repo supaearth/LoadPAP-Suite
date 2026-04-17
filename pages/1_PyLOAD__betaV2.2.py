@@ -23,7 +23,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css
+from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css, get_all_drive_services
 
 # ==========================================
 # 🛡️ 0. INITIALIZATION
@@ -110,40 +110,52 @@ def find_local_file(search_term, folder_path):
             if search_term in f.lower(): return os.path.join(root, f)
     return None
 
-def batch_search_drive(service, archive_id, codes):
-    """ ค้นหารหัสหลายๆ ตัวพร้อมกันใน Query เดียว (ทะลวง Subfolder + กรองไฟล์ขยะ) """
-    if not codes: return {}
-    
+def batch_search_drive(services_list, codes):
+    """ค้นหารหัสหลายๆ ตัวพร้อมกันใน Query เดียว
+    - รองรับหลาย Drive Services (multi-account)
+    - รัน chunks แบบ parallel
+    - cache ผลใน session_state
+    """
+    if not codes or not services_list: return {}
+
+    # ── Cache check ──
+    cache_key = "drive_cache_" + ",".join(sorted(str(c) for c in codes))
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+
     found_map = {}
-    # แบ่งกลุ่มค้นหาทีละ 20 รหัส (Google Query มีความยาวจำกัด)
-    for i in range(0, len(codes), 20):
-        chunk = codes[i:i+20]
-        # สร้างคำสั่ง: name contains 'รหัส1' or name contains 'รหัส2' ...
+    chunks = [codes[i:i+20] for i in range(0, len(codes), 20)]
+
+    def search_chunk(args):
+        svc, chunk = args
         query_parts = [f"name contains '{c}'" for c in chunk]
-        
-        # 💡 THE FIX 1: เอา '{archive_id}' in parents ออก เพื่อให้มุดหาใน Subfolder ได้หมด!
-        query = f"({ ' or '. join(query_parts)}) and trashed = false"
-        
+        query = f"({' or '.join(query_parts)}) and trashed = false"
         try:
-            results = service.files().list(
-                q=query, 
-                corpora='allDrives', 
-                supportsAllDrives=True, 
-                includeItemsFromAllDrives=True, 
+            results = svc.files().list(
+                q=query,
+                corpora='allDrives',
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
                 fields="files(id, name, webViewLink)"
             ).execute()
-            
-            files = results.get('files', [])
-            for f in files:
-                # ตรวจดูว่าไฟล์ที่เจอ ตรงกับรหัสไหนใน chunk บ้าง
-                for c in chunk:
-                    # 💡 THE FIX 2: บังคับว่าต้องลงท้ายด้วยนามสกุลวิดีโอเท่านั้น ป้องกันไฟล์แคช .pek
-                    if c.lower() in f['name'].lower() and f['name'].lower().endswith(('.mp4', '.mov', '.m4v', '.avi')):
-                        found_map[c] = f
-                        break
+            return results.get('files', []), chunk
         except Exception as e:
             st.error(f"⚠️ Drive Batch Error: {e}")
-            
+            return [], chunk
+
+    # ── รัน parallel: ทุก (service × chunk) พร้อมกัน ──
+    tasks = [(svc, chunk) for svc in services_list for chunk in chunks]
+    max_w = min(len(tasks), 8)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as ex:
+        for files, chunk in ex.map(search_chunk, tasks):
+            for f in files:
+                for c in chunk:
+                    if c not in found_map and c.lower() in f['name'].lower() \
+                            and f['name'].lower().endswith(('.mp4', '.mov', '.m4v', '.avi')):
+                        found_map[c] = f
+                        break
+
+    st.session_state[cache_key] = found_map
     return found_map
 
 def search_file_in_drive(service, archive_id, code):
@@ -678,9 +690,12 @@ if st.session_state.get('triggered'):
                         else:
                             codes_not_in_local.append(code)
 
-                    # 🔍 2. ถ้าในเครื่องไม่เจอ และมี Archive ID ให้ "ถาม Google Drive ทีเดียวรวมยอด"
+                    # 🔍 2. ถ้าในเครื่องไม่เจอ ค้นใน Drive ทุก account พร้อมกัน
                     if codes_not_in_local:
-                        drive_results = batch_search_drive(drive_service, archive_id, codes_not_in_local)
+                        all_drive_svcs = get_all_drive_services()
+                        if not all_drive_svcs:
+                            all_drive_svcs = [drive_service]
+                        drive_results = batch_search_drive(all_drive_svcs, codes_not_in_local)
                         for code, f_info in drive_results.items():
                             found_in_archive[code] = f_info
                             if code in raw_data['getty']: duplicates['getty'].append(code)

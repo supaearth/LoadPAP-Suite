@@ -3,7 +3,7 @@ import sys, os
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
-from utils import load_config, save_config, inject_global_css
+from utils import load_config, save_config, inject_global_css, add_account, remove_account, get_all_accounts_info, set_active_account
 
 st.set_page_config(
     page_title="LoadPAP Suite",
@@ -169,7 +169,7 @@ st.markdown("""
 # ============================================================
 # 🏠 HEADER  (แทนที่ st.markdown header เดิมทั้งก้อน)
 # ============================================================
-from utils import get_logged_in_email, logout_google
+from utils import get_logged_in_email, logout_google, get_all_accounts_info, add_account, remove_account, set_active_account
 
 _email = get_logged_in_email()
 
@@ -509,6 +509,85 @@ with st.container(border=True):
             _cfg['gemini_key2'] = new_k2
             save_config(_cfg)
             st.success("✅ บันทึกแล้ว!")
+
+# ============================================================
+# 👤 GOOGLE ACCOUNTS
+# ============================================================
+st.markdown("""
+<div style="height:1px; background:rgba(255,255,255,0.08); margin:32px 0 28px 0;"></div>
+<div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em;
+  color:#555a6a; text-transform:uppercase; margin-bottom:20px; padding-bottom:8px;
+  border-bottom:1px solid rgba(255,255,255,0.08);">
+  05 — Google Accounts
+</div>
+""", unsafe_allow_html=True)
+
+if 'accounts_info' not in st.session_state:
+    st.session_state.accounts_info = get_all_accounts_info()
+
+with st.container(border=True):
+    st.markdown("""
+    <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:15px; font-weight:700;
+      color:#e8eaf0; margin-bottom:4px;">👤 จัดการ Google Accounts</div>
+    <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:13px; color:#8b90a0;
+      line-height:1.6; margin-bottom:12px;">
+      เพิ่มหลาย Account เพื่อให้ระบบค้นหาไฟล์ใน Shared Drive ของทุก email ได้พร้อมกัน
+    </div>
+    """, unsafe_allow_html=True)
+
+    accounts = st.session_state.accounts_info
+    if not accounts:
+        st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:12px;color:#555a6a;'>ยังไม่มี account — กด Run แอปครั้งแรกเพื่อ Login</div>", unsafe_allow_html=True)
+    else:
+        for acc in accounts:
+            _ac1, _ac2, _ac3 = st.columns([5, 1, 1], gap="small")
+            with _ac1:
+                if acc['active']:
+                    st.markdown(
+                        f"<div style='font-family:IBM Plex Mono,monospace;font-size:12px;padding:8px 12px;"
+                        f"background:rgba(45,212,168,0.08);border:1px solid rgba(45,212,168,0.25);"
+                        f"border-radius:8px;display:flex;align-items:center;gap:8px;'>"
+                        f"<span style='color:#2dd4a8;font-size:9px;'>●</span>"
+                        f"<span style='color:#2dd4a8;font-weight:600;'>{acc['email']}</span>"
+                        f"<span style='color:#2dd4a8;font-size:10px;margin-left:4px;'>ACTIVE</span></div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        f"<div style='font-family:IBM Plex Mono,monospace;font-size:12px;padding:8px 12px;"
+                        f"background:#1a1e26;border:1px solid rgba(255,255,255,0.08);"
+                        f"border-radius:8px;color:#8b90a0;'>{acc['email']}</div>",
+                        unsafe_allow_html=True
+                    )
+            with _ac2:
+                if not acc['active']:
+                    if st.button("Switch", key=f"switch_{acc['idx']}", use_container_width=True):
+                        set_active_account(acc['idx'])
+                        st.session_state.accounts_info = get_all_accounts_info()
+                        st.rerun()
+            with _ac3:
+                if len(accounts) > 1 or not acc['active']:
+                    if st.button("Remove", key=f"remove_{acc['idx']}", use_container_width=True):
+                        remove_account(acc['idx'])
+                        st.session_state.accounts_info = get_all_accounts_info()
+                        st.rerun()
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    if st.button("➕ เพิ่ม Google Account", use_container_width=True):
+        with st.spinner("⏳ กำลังเปิดหน้า Login Google..."):
+            try:
+                new_idx = add_account()
+                st.session_state.accounts_info = get_all_accounts_info()
+                st.success(f"✅ เพิ่ม account สำเร็จ (Account {new_idx})")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ เพิ่ม account ไม่สำเร็จ: {e}")
+
+    st.markdown(
+        "<div style='font-family:IBM Plex Mono,monospace;font-size:10px;color:#555a6a;margin-top:6px;'>"
+        "💡 ทุก account ที่เพิ่มไว้จะถูกใช้ค้นหา Shared Drive พร้อมกันอัตโนมัติ</div>",
+        unsafe_allow_html=True
+    )
 
 # ============================================================
 # FOOTER
