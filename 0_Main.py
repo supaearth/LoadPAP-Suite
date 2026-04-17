@@ -171,10 +171,13 @@ st.markdown("""
 # ============================================================
 from utils import get_logged_in_email, logout_google, get_all_accounts_info, add_account, remove_account, set_active_account
 
-_email = get_logged_in_email()
+_accounts = get_all_accounts_info()
+_active_acc = next((a for a in _accounts if a['active']), None)
+_email = _active_acc['email'] if _active_acc else None
+_acc_count = len(_accounts)
 
 # ── header row ──
-hdr_left, hdr_right = st.columns([1, 1], gap="small")
+hdr_left, hdr_right = st.columns([3, 2], gap="small")
 
 with hdr_left:
     st.markdown("""
@@ -196,35 +199,81 @@ with hdr_left:
     """, unsafe_allow_html=True)
 
 with hdr_right:
-    badge_html = """
-    <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end; padding-top:8px;">
-      <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px;
-        background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
-        Beta
-      </span>
-      <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px;
-        background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
-        Mac Only
-      </span>
-    """
     if _email:
-        badge_html += f"""
-      <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; padding:4px 10px;
-        background:rgba(74,158,255,0.10); border-radius:20px; color:#4a9eff;
-        border:1px solid rgba(74,158,255,0.25); display:inline-flex; align-items:center; gap:6px;">
-        <span style="font-size:9px;">●</span>{_email}
-      </span>
-    """
+        _initial = _email[0].upper()
+        _short_email = _email if len(_email) <= 28 else _email[:25] + '...'
+        _acc_label = f"{_acc_count} accounts" if _acc_count > 1 else "1 account"
+        st.markdown(f"""
+        <div style="display:flex; justify-content:flex-end; align-items:flex-start; gap:8px; padding-top:6px;">
+          <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px;
+              background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
+              Beta
+            </span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px;
+              background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
+              macOS
+            </span>
+          </div>
+          <div style="background:#13161b; border:1px solid rgba(255,255,255,0.08); border-radius:10px;
+            padding:8px 12px; display:flex; align-items:center; gap:10px; min-width:0;">
+            <div style="width:32px; height:32px; border-radius:50%; flex-shrink:0;
+              background:linear-gradient(135deg,#4a9eff,#2dd4a8);
+              display:flex; align-items:center; justify-content:center;
+              font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:700; color:#fff;">
+              {_initial}
+            </div>
+            <div style="min-width:0;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600;
+                color:#e8eaf0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                {_short_email}
+              </div>
+              <div style="display:flex; align-items:center; gap:5px; margin-top:3px;">
+                <span style="width:6px; height:6px; border-radius:50%; background:#2dd4a8; flex-shrink:0; display:inline-block;"></span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#555a6a;">
+                  Active · {_acc_label}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        badge_html += """
-      <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; padding:4px 10px;
-        background:rgba(255,122,47,0.10); border-radius:20px; color:#ff7a2f;
-        border:1px solid rgba(255,122,47,0.25);">
-        ⚠ ยังไม่ได้ Login
-      </span>
-    """
-    badge_html += "</div>"
-    st.markdown(badge_html, unsafe_allow_html=True)
+        st.markdown("""
+        <div style="display:flex; justify-content:flex-end; align-items:flex-start; gap:8px; padding-top:6px;">
+          <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px;
+              background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
+              Beta
+            </span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px;
+              background:#1a1e26; border-radius:4px; color:#555a6a; border:1px solid rgba(255,255,255,0.08);">
+              macOS
+            </span>
+          </div>
+          <div style="background:#13161b; border:1px solid rgba(255,77,77,0.2); border-radius:10px;
+            padding:8px 12px; display:flex; align-items:center; gap:10px;">
+            <div style="width:32px; height:32px; border-radius:50%; flex-shrink:0;
+              background:rgba(255,77,77,0.12); border:1px solid rgba(255,77,77,0.25);
+              display:flex; align-items:center; justify-content:center; font-size:15px;">
+              ?
+            </div>
+            <div>
+              <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:12px;
+                font-weight:600; color:#ff4d4d;">
+                ยังไม่ได้ Login
+              </div>
+              <div style="display:flex; align-items:center; gap:5px; margin-top:3px;">
+                <span style="width:6px; height:6px; border-radius:50%; background:#ff4d4d; flex-shrink:0; display:inline-block;"></span>
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#555a6a;">
+                  ไม่มี Google Session
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
 st.markdown('<div style="height:1px; background:rgba(255,255,255,0.08); margin:20px 0 28px 0;"></div>', unsafe_allow_html=True)
 
 # ============================================================
