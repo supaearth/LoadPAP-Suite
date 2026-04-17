@@ -48,7 +48,7 @@ def parse_sheet_time(t_str):
         seconds = float(sec_str)
         return (minutes * 60.0) + seconds
     try: return float(t_str)
-    except: return 0.0
+    except (ValueError, TypeError): return 0.0
 
 def update_sheet_status_by_name(service, spreadsheet_id, target_name, status_text):
     if not spreadsheet_id or not target_name: return
@@ -80,7 +80,7 @@ def read_sheet_data(service, spreadsheet_id, range_name="Sheet1!A2:E"):
 
 def force_open_tab(url):
     try: subprocess.run(['open', '-a', 'Google Chrome', url], check=True, stderr=subprocess.DEVNULL)
-    except: webbrowser.open_new_tab(url)
+    except (subprocess.CalledProcessError, FileNotFoundError): webbrowser.open_new_tab(url)
 
 def get_bad_segments(file_path):
     segments = []
