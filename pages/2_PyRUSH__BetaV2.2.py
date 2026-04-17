@@ -9,6 +9,7 @@ import re
 import webbrowser
 import io
 import time
+import concurrent.futures
 from googleapiclient.http import MediaIoBaseDownload
 
 # ✅ ดึงฟังก์ชันกลางจาก utils.py (ไม่ต้องเขียนซ้ำอีกแล้ว)
@@ -83,78 +84,90 @@ def force_open_tab(url):
     except (subprocess.CalledProcessError, FileNotFoundError): webbrowser.open_new_tab(url)
 
 def get_bad_segments(file_path):
-    segments = []
-    cmd_black = [FFMPEG_EXE, '-i', file_path, '-vf', 'blackdetect=d=0.05:pic_th=0.98:pix_th=0.10', '-f', 'null', '-']
-    res_black_raw = subprocess.run(cmd_black, capture_output=True)
-    stderr_black = res_black_raw.stderr.decode('utf-8', errors='ignore')
-    b_starts = re.findall(r'black_start:\s*([\d.]+)', stderr_black)
-    b_ends   = re.findall(r'black_end:\s*([\d.]+)',   stderr_black)
-    for i in range(len(b_starts)):
-        e = b_ends[i] if i < len(b_ends) else "99999.0"
-        segments.append((float(b_starts[i]), float(e)))
-    cmd_white = [FFMPEG_EXE, '-i', file_path, '-vf', 'negate,blackdetect=d=0.05:pic_th=0.98:pix_th=0.10', '-f', 'null', '-']
-    res_white_raw = subprocess.run(cmd_white, capture_output=True)
-    stderr_white = res_white_raw.stderr.decode('utf-8', errors='ignore')
-    w_starts = re.findall(r'black_start:\s*([\d.]+)', stderr_white)
-    w_ends   = re.findall(r'black_end:\s*([\d.]+)',   stderr_white)
-    for i in range(len(w_starts)):
-        e = w_ends[i] if i < len(w_ends) else "99999"
-        segments.append((float(w_starts[i]), float(e)))
+    def _detect(vf):
+        cmd = [FFMPEG_EXE, '-i', file_path, '-vf', vf, '-f', 'null', '-']
+        res = subprocess.run(cmd, capture_output=True)
+        stderr = res.stderr.decode('utf-8', errors='ignore')
+        starts = re.findall(r'black_start:\s*([\d.]+)', stderr)
+        ends   = re.findall(r'black_end:\s*([\d.]+)',   stderr)
+        return [(float(starts[i]), float(ends[i]) if i < len(ends) else 99999.0)
+                for i in range(len(starts))]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        f_black = ex.submit(_detect, 'blackdetect=d=0.05:pic_th=0.98:pix_th=0.10')
+        f_white = ex.submit(_detect, 'negate,blackdetect=d=0.05:pic_th=0.98:pix_th=0.10')
+        segments = f_black.result() + f_white.result()
+
     segments.sort(key=lambda x: x[0])
-    return [(str(s), str(e)) for s, e in segments]
+    # Merge overlapping/adjacent segments
+    merged = []
+    for s, e in segments:
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    return [(str(s), str(e)) for s, e in merged]
 
 def run_ffmpeg_process(input_p, output_p, start=None, end=None, duration=None, is_none=False):
     temp_out = output_p.replace(".mp4", "_temp.mp4")
     if is_none:
-        cmd = [FFMPEG_EXE, '-y', '-i', input_p, '-c', 'copy', temp_out]
-    else:
-        cmd = [FFMPEG_EXE, '-y']
-        start_sec = float(start) if start is not None else 0.0
-        if start_sec > 0: cmd += ['-ss', str(start_sec)]
-        cmd += ['-i', input_p]
-        if end is not None:
-            calc_dur = float(end) - start_sec
-            if calc_dur > 0: cmd += ['-t', str(calc_dur)]
-        elif duration is not None: cmd += ['-t', str(duration)]
-        cmd += ['-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast', '-c:a', 'aac', temp_out]
-    subprocess.run(cmd, capture_output=True)
-    if os.path.exists(temp_out) and os.path.getsize(temp_out) > 1024:
-        bads = get_bad_segments(temp_out)
-        if not bads:
-            os.rename(temp_out, output_p); return True
-        else:
-            probe_res_raw = subprocess.run([FFMPEG_EXE, '-i', temp_out], capture_output=True)
-            has_audio = "Audio:" in probe_res_raw.stderr.decode('utf-8', errors='ignore')
-            filter_str = "not(" + " + ".join([f"between(t,{s},{e})" for s, e in bads]) + ")"
-            cmd_clean = [FFMPEG_EXE, '-y', '-i', temp_out, '-vf', f"select='{filter_str}',setpts=N/FRAME_RATE/TB"]
-            if has_audio: cmd_clean += ['-af', f"aselect='{filter_str}',asetpts=N/SR/TB", '-c:a', 'aac']
-            cmd_clean += ['-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast', output_p]
-            subprocess.run(cmd_clean, capture_output=True)
-            if os.path.exists(output_p) and os.path.getsize(output_p) > 1024:
-                os.remove(temp_out); return True
-            else:
-                if os.path.exists(output_p): os.remove(output_p)
-                os.rename(temp_out, output_p); return True
-    else:
+        # copy โดยตรง ไม่ต้อง detect (ไม่มีการ re-encode)
+        res = subprocess.run([FFMPEG_EXE, '-y', '-i', input_p, '-c', 'copy', output_p], capture_output=True)
+        return res.returncode == 0 and os.path.exists(output_p) and os.path.getsize(output_p) > 1024
+    cmd = [FFMPEG_EXE, '-y']
+    start_sec = float(start) if start is not None else 0.0
+    if start_sec > 0: cmd += ['-ss', str(start_sec)]
+    cmd += ['-i', input_p]
+    if end is not None:
+        calc_dur = float(end) - start_sec
+        if calc_dur > 0: cmd += ['-t', str(calc_dur)]
+    elif duration is not None: cmd += ['-t', str(duration)]
+    cmd += ['-threads', '0', '-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast', '-c:a', 'aac', temp_out]
+    res = subprocess.run(cmd, capture_output=True)
+    if res.returncode != 0 or not os.path.exists(temp_out) or os.path.getsize(temp_out) <= 1024:
         if os.path.exists(temp_out): os.remove(temp_out)
         return False
+    bads = get_bad_segments(temp_out)
+    if not bads:
+        os.rename(temp_out, output_p); return True
+    probe_res_raw = subprocess.run([FFMPEG_EXE, '-i', temp_out], capture_output=True)
+    has_audio = "Audio:" in probe_res_raw.stderr.decode('utf-8', errors='ignore')
+    filter_str = "not(" + " + ".join([f"between(t,{s},{e})" for s, e in bads]) + ")"
+    cmd_clean = [FFMPEG_EXE, '-y', '-i', temp_out, '-vf', f"select='{filter_str}',setpts=N/FRAME_RATE/TB"]
+    if has_audio: cmd_clean += ['-af', f"aselect='{filter_str}',asetpts=N/SR/TB", '-c:a', 'aac']
+    cmd_clean += ['-threads', '0', '-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast', output_p]
+    res_clean = subprocess.run(cmd_clean, capture_output=True)
+    if res_clean.returncode == 0 and os.path.exists(output_p) and os.path.getsize(output_p) > 1024:
+        os.remove(temp_out); return True
+    # clean pass ล้มเหลว — fallback ใช้ temp แทน
+    if os.path.exists(output_p): os.remove(output_p)
+    os.rename(temp_out, output_p); return True
 
 def run_ffmpeg_multi_trim(input_p, output_p, segments):
-    temp_files = []
     list_file = output_p.replace(".mp4", "_list.txt")
     probe_res = subprocess.run([FFMPEG_EXE, '-i', input_p], capture_output=True)
     has_audio = "Audio:" in probe_res.stderr.decode('utf-8', errors='ignore')
+
+    def _trim_part(args):
+        i, s, e = args
+        part_name = output_p.replace(".mp4", f"_part{i}.mp4")
+        dur = float(e) - float(s)
+        cmd_trim = [FFMPEG_EXE, '-y', '-ss', str(s), '-i', input_p, '-t', str(dur),
+                    '-threads', '0', '-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast']
+        if has_audio: cmd_trim += ['-c:a', 'aac']
+        cmd_trim.append(part_name)
+        res = subprocess.run(cmd_trim, capture_output=True)
+        if res.returncode == 0 and os.path.exists(part_name) and os.path.getsize(part_name) > 1024:
+            return part_name
+        return None
+
+    temp_files = []
     try:
-        for i, (s, e) in enumerate(segments):
-            part_name = output_p.replace(".mp4", f"_part{i}.mp4")
-            dur = float(e) - float(s)
-            cmd_trim = [FFMPEG_EXE, '-y', '-ss', str(s), '-i', input_p, '-t', str(dur),
-                        '-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast']
-            if has_audio: cmd_trim += ['-c:a', 'aac']
-            cmd_trim.append(part_name)
-            subprocess.run(cmd_trim, capture_output=True)
-            if os.path.exists(part_name) and os.path.getsize(part_name) > 1024:
-                temp_files.append(part_name)
+        max_workers = min(len(segments), os.cpu_count() or 4)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            # map รักษาลำดับตาม input → concat ถูกต้องเสมอ
+            results = list(ex.map(_trim_part, [(i, s, e) for i, (s, e) in enumerate(segments)]))
+        temp_files = [r for r in results if r is not None]
         if not temp_files: return False
         with open(list_file, 'w', encoding='utf-8') as f:
             for t in temp_files:
@@ -170,10 +183,13 @@ def run_ffmpeg_multi_trim(input_p, output_p, segments):
                 cmd_clean = [FFMPEG_EXE, '-y', '-i', temp_out,
                              '-vf', f"select='{filter_str_bad}',setpts=N/FRAME_RATE/TB"]
                 if has_audio: cmd_clean += ['-af', f"aselect='{filter_str_bad}',asetpts=N/SR/TB", '-c:a', 'aac']
-                cmd_clean += ['-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast', output_p]
-                subprocess.run(cmd_clean, capture_output=True)
-                if os.path.exists(output_p): os.remove(temp_out)
-                else: os.rename(temp_out, output_p)
+                cmd_clean += ['-threads', '0', '-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast', output_p]
+                res_clean = subprocess.run(cmd_clean, capture_output=True)
+                if res_clean.returncode == 0 and os.path.exists(output_p) and os.path.getsize(output_p) > 1024:
+                    os.remove(temp_out)
+                else:
+                    if os.path.exists(output_p): os.remove(output_p)
+                    os.rename(temp_out, output_p)
                 return True
         return False
     finally:
@@ -702,5 +718,8 @@ if watchdog_on:
                         update_sheet_status_by_name(service, sheet_id, task['name'],
                             "✅ Done" if success else "❌ Error/Skipped")
                     if success: st.toast(f"✅ ตัดเสร็จ: {task['name']}")
-    time.sleep(3)
+                    # ตัดเสร็จแล้ว rerun ทันที ไม่ต้อง sleep
+                    st.rerun()
+    # ไม่มีงานที่ต้องตัด — poll ทุก 1 วินาที
+    time.sleep(1)
     st.rerun()
