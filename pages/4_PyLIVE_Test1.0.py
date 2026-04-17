@@ -1,8 +1,8 @@
 """
 PyL.I.V.E. — Live Intelligence Video Extractor
-Beta V2.0 (video-only build — cover/thumbnail features removed)
+V3.0
 
-วาง file นี้ที่: pages/4_PyL_I_V_E__BetaV2_0.py
+วาง file นี้ที่: pages/4_PyLIVE_V3.0.py
 """
 
 import sys, os, re, time, shutil, subprocess, tempfile, json
@@ -611,12 +611,12 @@ st.markdown("""
     <div style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:700;
       color:#e8eaf0;line-height:1.1;">PyL.I.V.E.</div>
     <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#555a6a;
-      margin-top:2px;letter-spacing:.06em;">LIVE INTELLIGENCE VIDEO EXTRACTOR — BETA V2.0</div>
+      margin-top:2px;letter-spacing:.06em;">LIVE INTELLIGENCE VIDEO EXTRACTOR — V3.0</div>
   </div>
   <div style="margin-left:auto;display:flex;gap:8px;">
     <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;padding:3px 8px;
       background:#1a1e26;border-radius:4px;color:#ff7a2f;
-      border:1px solid rgba(255,122,47,.25);">Beta V2.0</span>
+      border:1px solid rgba(255,122,47,.25);">V3.0</span>
   </div>
 </div>
 <div style="height:1px;background:rgba(255,255,255,.08);margin:16px 0 22px 0;"></div>
