@@ -110,12 +110,31 @@ def display_social_link(url, icon_url, platform_name):
 
 # select_folder_mac → ใช้จาก utils.py แล้ว
 
+def build_local_index(folder_path):
+    """Walk directory ครั้งเดียว → dict {lowercase_filename: full_path}"""
+    if not folder_path or not os.path.exists(folder_path): return {}
+    index = {}
+    for root, dirs, files in os.walk(folder_path):
+        for f in files:
+            index[f.lower()] = os.path.join(root, f)
+    return index
+
 def find_local_file(search_term, folder_path):
     if not folder_path or not os.path.exists(folder_path): return None
     search_term = str(search_term).lower().strip()
+    # fallback สำหรับกรณีที่เรียก standalone
     for root, dirs, files in os.walk(folder_path):
         for f in files:
             if search_term in f.lower(): return os.path.join(root, f)
+    return None
+
+def find_in_index(search_term, index):
+    """ค้นหาใน index dict แทนการ walk ซ้ำ — O(n_files) แค่ครั้งเดียว"""
+    if not index: return None
+    search_term = str(search_term).lower().strip()
+    for fname, fpath in index.items():
+        if search_term in fname:
+            return fpath
     return None
 
 def batch_search_drive(services_list, codes):
@@ -690,22 +709,36 @@ if st.session_state.get('triggered'):
                 # Step 1: ควานหาไฟล์เก่า
                 _prog("กำลังควานหาไฟล์เก่าในคลัง Local + Drive...", "🕵️", pct=0.10)
                 if True:
-                    # 🔍 1. เช็กในเครื่อง (Local) ก่อน (เร็วที่สุด)
-                    codes_not_in_local = []
-                    for code in raw_data['getty'] + raw_data['reuters']:
-                        local_f = find_local_file(code, local_archive_dir) if local_archive_dir else None
-                        if local_f:
-                            found_in_local[code] = local_f
+                    all_codes = raw_data['getty'] + raw_data['reuters']
+
+                    # ── Build local index ครั้งเดียว (cache ใน session) ──
+                    _idx_key = f"local_idx_{local_archive_dir}"
+                    if local_archive_dir and _idx_key not in st.session_state:
+                        st.session_state[_idx_key] = build_local_index(local_archive_dir)
+                    local_index = st.session_state.get(_idx_key, {}) if local_archive_dir else {}
+
+                    # ── รัน Local search + Drive search แบบ parallel ──
+                    def _search_local_all(codes):
+                        result = {}
+                        for code in codes:
+                            hit = find_in_index(code, local_index)
+                            if hit: result[code] = hit
+                        return result
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+                        fut_local = ex.submit(_search_local_all, all_codes)
+                        fut_drive = ex.submit(batch_search_drive, [drive_service], all_codes)
+                        local_hits     = fut_local.result()
+                        drive_hits_all = fut_drive.result()
+
+                    # 🔍 Local มีก่อน — drive ใช้เฉพาะที่ local ไม่เจอ
+                    for code in all_codes:
+                        if code in local_hits:
+                            found_in_local[code] = local_hits[code]
                             if code in raw_data['getty']: duplicates['getty'].append(code)
                             else: duplicates['reuters'].append(code)
-                        else:
-                            codes_not_in_local.append(code)
-
-                    # 🔍 2. ถ้าในเครื่องไม่เจอ ค้นใน Drive ของ active account
-                    if codes_not_in_local:
-                        drive_results = batch_search_drive([drive_service], codes_not_in_local)
-                        for code, f_info in drive_results.items():
-                            found_in_archive[code] = f_info
+                        elif code in drive_hits_all:
+                            found_in_archive[code] = drive_hits_all[code]
                             if code in raw_data['getty']: duplicates['getty'].append(code)
                             else: duplicates['reuters'].append(code)
                 
