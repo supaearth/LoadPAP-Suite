@@ -23,7 +23,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css, get_all_drive_services
+from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css
 
 # ==========================================
 # 🛡️ 0. INITIALIZATION
@@ -681,12 +681,9 @@ if st.session_state.get('triggered'):
                         else:
                             codes_not_in_local.append(code)
 
-                    # 🔍 2. ถ้าในเครื่องไม่เจอ ค้นใน Drive ทุก account พร้อมกัน
+                    # 🔍 2. ถ้าในเครื่องไม่เจอ ค้นใน Drive ของ active account
                     if codes_not_in_local:
-                        all_drive_svcs = get_all_drive_services()
-                        if not all_drive_svcs:
-                            all_drive_svcs = [drive_service]
-                        drive_results = batch_search_drive(all_drive_svcs, codes_not_in_local)
+                        drive_results = batch_search_drive([drive_service], codes_not_in_local)
                         for code, f_info in drive_results.items():
                             found_in_archive[code] = f_info
                             if code in raw_data['getty']: duplicates['getty'].append(code)
