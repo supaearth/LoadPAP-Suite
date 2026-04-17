@@ -444,15 +444,8 @@ with st.sidebar:
                 st.warning(f"⚠️ ไม่สามารถอ่านชื่อเอกสารได้: {_e}")
                 st.session_state['parsed_doc_url'] = st.session_state['safe_doc_url']
 
-    saved_archive_url = app_config.get('archive_url', '')
-    st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:5px;margin-top:8px;'>2 — Drive Archive URL</div>", unsafe_allow_html=True)
-    archive_url = st.text_input("Archive URL", value=saved_archive_url, label_visibility="collapsed", placeholder="วาง URL Drive...")
-    if archive_url != saved_archive_url:
-        app_config['archive_url'] = archive_url
-        save_config(app_config)
-
     st.divider()
-    st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:5px;'>3 — Local Archive</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:5px;'>2 — Local Archive</div>", unsafe_allow_html=True)
     if st.button("📂 เลือกโฟลเดอร์คลัง", use_container_width=True):
         path = select_folder_mac("เลือกโฟลเดอร์คลังเก็บไฟล์เก่า")
         if path:
@@ -462,7 +455,7 @@ with st.sidebar:
             st.rerun()
     st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{st.session_state['local_archive'] or 'ยังไม่ได้เลือก'}</div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:5px;'>4 — Destination</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:5px;'>3 — Destination</div>", unsafe_allow_html=True)
     if 'dest_folder' not in st.session_state or not st.session_state['dest_folder']:
         st.session_state['dest_folder'] = app_config.get('dest_folder', os.path.join(os.getcwd(), "Downloads_Footage"))
     if st.button("📥 เลือกโฟลเดอร์บันทึก", use_container_width=True):
@@ -552,7 +545,6 @@ if run_btn:
     st.session_state['last_doc'] = doc_url
     st.session_state['last_ep'] = ep_name
     st.session_state['last_p_type'] = p_type
-    st.session_state['last_archive_url'] = archive_url
     st.session_state['start_time'] = time.time()
     st.session_state['elapsed_time'] = 0
 
@@ -560,8 +552,7 @@ if run_btn:
 
 if st.session_state.get('triggered'):
     doc_id = extract_id(doc_url)
-    archive_id = extract_id(archive_url)
-    
+
     f_name = full_project_name if ep_name else p_type
     f_name = re.sub(r'[\\/*?:"<>|]', "", f_name).strip()
     local_dir = os.path.join(st.session_state['dest_folder'], f_name)
