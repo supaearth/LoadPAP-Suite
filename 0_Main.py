@@ -603,7 +603,7 @@ with _acc_col:
                         )
                 with _ab1:
                     if not acc['active']:
-                        if st.button("Switch", key=f"switch_{acc['idx']}", use_container_width=True):
+                        if st.button("Switch", type="primary", key=f"switch_{acc['idx']}", use_container_width=True):
                             set_active_account(acc['idx'])
                             st.session_state.accounts_info = get_all_accounts_info()
                             st.rerun()
@@ -614,7 +614,7 @@ with _acc_col:
                             st.session_state.accounts_info = get_all_accounts_info()
                             st.rerun()
 
-        if st.button("➕ เพิ่ม Account", type="primary", use_container_width=False, key="add_acc_btn"):
+        if st.button("➕ เพิ่ม", use_container_width=False, key="add_acc_btn"):
             with st.spinner("⏳ กำลังเปิดหน้า Login..."):
                 try:
                     new_idx = add_account()
