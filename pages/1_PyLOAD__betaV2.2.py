@@ -10,6 +10,7 @@ from google import genai
 from google.genai import types
 import subprocess
 import urllib.request
+from urllib.parse import urlparse
 import time
 from streamlit_autorefresh import st_autorefresh
 import requests
@@ -211,7 +212,9 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
     # 💡 1. โหลดรูปภาพ
     if any(clean_url.lower().split('?')[0].endswith(ext) for ext in image_extensions):
         try:
-            ext = clean_url.split('.')[-1].split('?')[0].lower()
+            parsed_path = urlparse(clean_url).path
+            raw_ext = parsed_path.split('.')[-1].lower() if '.' in parsed_path else ''
+            ext = raw_ext if f'.{raw_ext}' in image_extensions else 'jpg'
             temp_path = os.path.join(image_dir, f"temp_{int(time.time()*1000)}.{ext}")
             
             headers = {
