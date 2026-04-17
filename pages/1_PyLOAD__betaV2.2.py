@@ -46,7 +46,7 @@ def init_session_state():
         try:
             with open(st.session_state['history_file'], 'r', encoding='utf-8') as f:
                 st.session_state['history_data'] = json.load(f)
-        except: st.session_state['history_data'] = []
+        except (json.JSONDecodeError, ValueError, OSError): st.session_state['history_data'] = []
 
 init_session_state()
 
@@ -151,7 +151,7 @@ def search_file_in_drive(service, archive_id, code):
         query = f"name contains '{code}' and trashed = false"
         results = service.files().list(q=query, corpora='allDrives', supportsAllDrives=True, includeItemsFromAllDrives=True, fields="files(id, name, webViewLink)", pageSize=3).execute()
         return results.get('files', [])
-    except: return []
+    except Exception: return []
 
 def extract_handle_from_url(url):
     m = re.search(r'tiktok\.com/(@[\w\.-]+)', url, re.IGNORECASE)
@@ -196,7 +196,7 @@ def get_ai_caption(file_path, api_key, source_tag):
         caption = sanitize_filename(response.text)
         if not caption or len(caption) < 3: return None
         return f"{caption}_{source_tag}"
-    except: return None
+    except Exception: return None
 
 # 🧠 เครื่องยนต์ตัวเต็ม (จัดการรูปและวิดีโอแบบแยกโฟลเดอร์)
 def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
@@ -252,7 +252,7 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
             res = subprocess.run(['gallery-dl', '--directory', image_dir, clean_url], capture_output=True, timeout=60)
             if res.returncode == 0: return True, clean_url
             else: return False, clean_url
-        except: return False, clean_url
+        except Exception: return False, clean_url
 
     # 💡 3. วิดีโอ (YT, TT, FB, IG)
     # 💡 3. วิดีโอ (YT, TT, FB, IG)
@@ -358,7 +358,8 @@ def save_run_history(project_name, local_dir, stats, elapsed_time):
     try:
         with open(st.session_state['history_file'], 'w', encoding='utf-8') as f:
             json.dump(st.session_state['history_data'], f, ensure_ascii=False, indent=2)
-    except: pass
+    except (OSError, IOError) as e:
+        print(f"Warning: Could not save history: {e}")
 
 # ============================================================
 # 🗂️ SIDEBAR
@@ -661,7 +662,7 @@ if st.session_state.get('triggered'):
                 try:
                     subprocess.run(["pip3", "install", "--upgrade", "yt-dlp", "--break-system-packages"], capture_output=True, timeout=20)
                     import importlib; importlib.reload(yt_dlp)
-                except: pass
+                except Exception: pass
 
                 # Step 1: ควานหาไฟล์เก่า
                 _prog("กำลังควานหาไฟล์เก่าในคลัง Local + Drive...", "🕵️", pct=0.10)
@@ -726,7 +727,8 @@ if st.session_state.get('triggered'):
                             try:
                                 source_key = 'getty' if code in raw_data['getty'] else 'reuters'
                                 shutil.copy2(path, get_dest(path, source_key))
-                            except: pass
+                            except (OSError, shutil.Error) as e:
+                                print(f"Warning: copy failed for {code}: {e}")
 
                     if st.session_state['found_in_archive']:
                         _prog(f"ขั้นที่ 2/4 — ดึงไฟล์เก่าจาก Drive Archive ({len(st.session_state['found_in_archive'])} ไฟล์)", "☁️", pct=0.35)
@@ -741,8 +743,9 @@ if st.session_state.get('triggered'):
                                     done = False
                                     while not done:
                                           _, done = downloader.next_chunk()
-                                
-                            except: pass
+
+                            except Exception as e:
+                                st.session_state['failed']['drive'].append(code)
                     
                     if raw_data['drive_ids']:
                         _prog(f"ขั้นที่ 2.5/4 — ดาวน์โหลดไฟล์ Google Drive ใหม่ ({len(raw_data['drive_ids'])} ไฟล์)", "📁", pct=0.5)
@@ -775,7 +778,7 @@ if st.session_state.get('triggered'):
                     
                     if social_links:
                         _prog(f"ขั้นที่ 3/4 — กำลังดึง Social/Web {len(social_links)} ลิงก์...", "🚀", pct=0.55)
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(social_links))) as executor:
                             # โยนพารามิเตอร์ 5 ตัวให้ตรงเป๊ะ
                             futures = {executor.submit(download_worker, link[0], link[1], link[2], link[3], gemini_key): link for link in social_links}
                             total_f = len(futures)
