@@ -66,23 +66,31 @@ MY_GEMINI_KEY = ', '.join(k for k in [_k1, _k2] if k)
 # get_g_services, extract_id, select_folder_mac, load_config, save_config
 # → ย้ายไปอยู่ใน utils.py แล้ว (import ด้านบน)
 
+MAX_OPEN_TABS = 10
+
 def make_open_ci_button(urls, button_text, color_hex, project_name):
     valid_urls = [u for u in urls if str(u).startswith('http')]
     if not valid_urls: return
+    total = len(valid_urls)
+    batch = valid_urls[:MAX_OPEN_TABS]
     safe_project_name = project_name.replace("'", "\\'").replace('"', '\\"')
-    js_links = " ".join([f"setTimeout(() => window.open('{u}', '_blank'), {i*400});" for i, u in enumerate(valid_urls)])
+    js_links = " ".join([f"setTimeout(() => window.open('{u}', '_blank'), {i*400});" for i, u in enumerate(batch)])
     js_code = f"navigator.clipboard.writeText('{safe_project_name}'); {js_links}"
+    tab_label = f"{len(batch)}/{total} แท็บ" if total > MAX_OPEN_TABS else f"{total} แท็บ"
     html = f"""
-    <button onclick="{js_code}" 
-    style="padding: 10px 15px; background-color: #1a1e26; color: {color_hex}; 
-    border: 1px solid {color_hex}; border-radius: 8px; cursor: pointer; font-weight: bold; 
+    <button onclick="{js_code}"
+    style="padding: 10px 15px; background-color: #1a1e26; color: {color_hex};
+    border: 1px solid {color_hex}; border-radius: 8px; cursor: pointer; font-weight: bold;
     width: 100%; margin-bottom: 8px; font-family: 'IBM Plex Sans Thai', sans-serif; transition: background-color 0.15s;"
     onmouseover="this.style.backgroundColor='{color_hex}22'"
     onmouseout="this.style.backgroundColor='#1a1e26'">
-    🚀 {button_text} ({len(valid_urls)} แท็บ)
+    🚀 {button_text} ({tab_label})
     </button>
     """
     components.html(html, height=55)
+    if total > MAX_OPEN_TABS:
+        remaining = total - MAX_OPEN_TABS
+        st.caption(f"⚠️ เปิดแค่ {MAX_OPEN_TABS} แท็บแรก ยังเหลืออีก {remaining} รายการ")
 
 def display_social_link(url, icon_url, platform_name):
     if not url: return

@@ -543,9 +543,13 @@ if 'all_tasks' in st.session_state:
             unsafe_allow_html=True
         )
         if m_r:
-            if st.button("🔗 เปิด Tab Reuters ทั้งหมด", use_container_width=True, key="open_reuters"):
-                for rid in m_r:
+            _MAX_TABS = 10
+            _label_r = f"🔗 เปิด Tab Reuters ({min(len(m_r), _MAX_TABS)}/{len(m_r)})" if len(m_r) > _MAX_TABS else f"🔗 เปิด Tab Reuters ทั้งหมด ({len(m_r)})"
+            if st.button(_label_r, use_container_width=True, key="open_reuters"):
+                for rid in m_r[:_MAX_TABS]:
                     force_open_tab(f"https://www.reutersconnect.com/all?search=all%3A{rid}")
+            if len(m_r) > _MAX_TABS:
+                st.caption(f"⚠️ เปิดแค่ {_MAX_TABS} แท็บแรก ยังเหลืออีก {len(m_r) - _MAX_TABS} รายการ")
         if f_r:
             found_html = ""
             for rid, loc in f_r:
@@ -582,9 +586,13 @@ if 'all_tasks' in st.session_state:
             unsafe_allow_html=True
         )
         if m_g:
-            if st.button("🔗 เปิด Tab Getty ทั้งหมด", use_container_width=True, key="open_getty"):
-                for gid in m_g:
+            _MAX_TABS = 10
+            _label_g = f"🔗 เปิด Tab Getty ({min(len(m_g), _MAX_TABS)}/{len(m_g)})" if len(m_g) > _MAX_TABS else f"🔗 เปิด Tab Getty ทั้งหมด ({len(m_g)})"
+            if st.button(_label_g, use_container_width=True, key="open_getty"):
+                for gid in m_g[:_MAX_TABS]:
                     force_open_tab(f"https://www.gettyimages.com/search/2/image?phrase={gid}")
+            if len(m_g) > _MAX_TABS:
+                st.caption(f"⚠️ เปิดแค่ {_MAX_TABS} แท็บแรก ยังเหลืออีก {len(m_g) - _MAX_TABS} รายการ")
         if f_g:
             found_html = ""
             for gid, loc in f_g:
