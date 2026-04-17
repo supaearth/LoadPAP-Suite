@@ -72,25 +72,69 @@ def make_open_ci_button(urls, button_text, color_hex, project_name):
     valid_urls = [u for u in urls if str(u).startswith('http')]
     if not valid_urls: return
     total = len(valid_urls)
-    batch = valid_urls[:MAX_OPEN_TABS]
     safe_project_name = project_name.replace("'", "\\'").replace('"', '\\"')
-    js_links = " ".join([f"setTimeout(() => window.open('{u}', '_blank'), {i*400});" for i, u in enumerate(batch)])
-    js_code = f"navigator.clipboard.writeText('{safe_project_name}'); {js_links}"
-    tab_label = f"{len(batch)}/{total} แท็บ" if total > MAX_OPEN_TABS else f"{total} แท็บ"
-    html = f"""
-    <button onclick="{js_code}"
-    style="padding: 10px 15px; background-color: #1a1e26; color: {color_hex};
-    border: 1px solid {color_hex}; border-radius: 8px; cursor: pointer; font-weight: bold;
-    width: 100%; margin-bottom: 8px; font-family: 'IBM Plex Sans Thai', sans-serif; transition: background-color 0.15s;"
-    onmouseover="this.style.backgroundColor='{color_hex}22'"
-    onmouseout="this.style.backgroundColor='#1a1e26'">
-    🚀 {button_text} ({tab_label})
-    </button>
-    """
-    components.html(html, height=55)
-    if total > MAX_OPEN_TABS:
-        remaining = total - MAX_OPEN_TABS
-        st.caption(f"⚠️ เปิดแค่ {MAX_OPEN_TABS} แท็บแรก ยังเหลืออีก {remaining} รายการ")
+
+    if total <= MAX_OPEN_TABS:
+        js_links = " ".join([f"setTimeout(() => window.open('{u}', '_blank'), {i*400});" for i, u in enumerate(valid_urls)])
+        js_code = f"navigator.clipboard.writeText('{safe_project_name}'); {js_links}"
+        html = f"""
+        <button onclick="{js_code}"
+        style="padding: 10px 15px; background-color: #1a1e26; color: {color_hex};
+        border: 1px solid {color_hex}; border-radius: 8px; cursor: pointer; font-weight: bold;
+        width: 100%; margin-bottom: 8px; font-family: 'IBM Plex Sans Thai', sans-serif; transition: background-color 0.15s;"
+        onmouseover="this.style.backgroundColor='{color_hex}22'"
+        onmouseout="this.style.backgroundColor='#1a1e26'">
+        🚀 {button_text} ({total} แท็บ)
+        </button>
+        """
+        components.html(html, height=55)
+    else:
+        batches = [valid_urls[i:i+MAX_OPEN_TABS] for i in range(0, total, MAX_OPEN_TABS)]
+        n = len(batches)
+        safe_key = re.sub(r'[^\w]', '_', button_text + '_' + project_name[:15])[:40]
+
+        buttons_html = ""
+        restore_js_parts = []
+        for i, batch in enumerate(batches):
+            start = i * MAX_OPEN_TABS + 1
+            end = start + len(batch) - 1
+            lbl = f"{start}–{end}"
+            sk = f"pload_{safe_key}_{i}"
+            js_links = " ".join([f"setTimeout(()=>window.open('{u}','_blank'),{j*400});" for j, u in enumerate(batch)])
+            js_click = (
+                f"navigator.clipboard.writeText('{safe_project_name}');"
+                f"{js_links}"
+                f"localStorage.setItem('{sk}','1');"
+                f"this.classList.add('opened');"
+                f"this.querySelector('.lbl').textContent='✅ {lbl}';"
+            )
+            buttons_html += (
+                f'<button id="b{i}" class="batch-btn" onclick="{js_click}">'
+                f'<span class="lbl">🚀 {lbl}</span>'
+                f'</button>'
+            )
+            restore_js_parts.append(
+                f"if(localStorage.getItem('{sk}')){{var b=document.getElementById('b{i}');"
+                f"if(b){{b.classList.add('opened');b.querySelector('.lbl').textContent='✅ {lbl}';}}}}"
+            )
+
+        restore_js = "\n".join(restore_js_parts)
+        height = 30 + ((n + 4) // 5) * 44
+
+        html = f"""
+        <style>
+        .batch-btn{{padding:7px 11px;background:#1a1e26;color:{color_hex};border:1px solid {color_hex};
+        border-radius:8px;cursor:pointer;font-weight:bold;font-family:'IBM Plex Sans Thai',sans-serif;
+        font-size:12px;transition:all .15s;margin:0 4px 6px 0;}}
+        .batch-btn:hover{{background:{color_hex}22;}}
+        .batch-btn.opened{{background:{color_hex}18;opacity:.5;border-style:dashed;cursor:default;}}
+        .bh{{color:{color_hex}99;font-family:'IBM Plex Sans Thai',sans-serif;font-size:11px;margin-bottom:4px;}}
+        </style>
+        <div class="bh">🚀 {button_text} — {total} รายการ · {n} ชุด</div>
+        <div style="display:flex;flex-wrap:wrap;">{buttons_html}</div>
+        <script>(function(){{{restore_js}}})();</script>
+        """
+        components.html(html, height=height)
 
 def display_social_link(url, icon_url, platform_name):
     if not url: return

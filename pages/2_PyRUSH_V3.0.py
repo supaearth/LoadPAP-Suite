@@ -544,12 +544,20 @@ if 'all_tasks' in st.session_state:
         )
         if m_r:
             _MAX_TABS = 10
-            _label_r = f"🔗 เปิด Tab Reuters ({min(len(m_r), _MAX_TABS)}/{len(m_r)})" if len(m_r) > _MAX_TABS else f"🔗 เปิด Tab Reuters ทั้งหมด ({len(m_r)})"
-            if st.button(_label_r, use_container_width=True, key="open_reuters"):
-                for rid in m_r[:_MAX_TABS]:
-                    force_open_tab(f"https://www.reutersconnect.com/all?search=all%3A{rid}")
-            if len(m_r) > _MAX_TABS:
-                st.caption(f"⚠️ เปิดแค่ {_MAX_TABS} แท็บแรก ยังเหลืออีก {len(m_r) - _MAX_TABS} รายการ")
+            _batches_r = [m_r[i:i+_MAX_TABS] for i in range(0, len(m_r), _MAX_TABS)]
+            if st.session_state.get('_rush_r_sig') != len(m_r):
+                st.session_state['_rush_r_sig'] = len(m_r)
+                st.session_state['_rush_r_opened'] = set()
+            _opened_r = st.session_state.get('_rush_r_opened', set())
+            _cols_r = st.columns(min(len(_batches_r), 5))
+            for _i, _batch in enumerate(_batches_r):
+                _s = _i * _MAX_TABS + 1
+                _e = _s + len(_batch) - 1
+                _lbl = f"✅ {_s}–{_e}" if _i in _opened_r else f"🔗 {_s}–{_e}"
+                if _cols_r[_i % len(_cols_r)].button(_lbl, key=f"open_r_b{_i}", use_container_width=True):
+                    for rid in _batch:
+                        force_open_tab(f"https://www.reutersconnect.com/all?search=all%3A{rid}")
+                    st.session_state['_rush_r_opened'] = _opened_r | {_i}
         if f_r:
             found_html = ""
             for rid, loc in f_r:
@@ -587,12 +595,20 @@ if 'all_tasks' in st.session_state:
         )
         if m_g:
             _MAX_TABS = 10
-            _label_g = f"🔗 เปิด Tab Getty ({min(len(m_g), _MAX_TABS)}/{len(m_g)})" if len(m_g) > _MAX_TABS else f"🔗 เปิด Tab Getty ทั้งหมด ({len(m_g)})"
-            if st.button(_label_g, use_container_width=True, key="open_getty"):
-                for gid in m_g[:_MAX_TABS]:
-                    force_open_tab(f"https://www.gettyimages.com/search/2/image?phrase={gid}")
-            if len(m_g) > _MAX_TABS:
-                st.caption(f"⚠️ เปิดแค่ {_MAX_TABS} แท็บแรก ยังเหลืออีก {len(m_g) - _MAX_TABS} รายการ")
+            _batches_g = [m_g[i:i+_MAX_TABS] for i in range(0, len(m_g), _MAX_TABS)]
+            if st.session_state.get('_rush_g_sig') != len(m_g):
+                st.session_state['_rush_g_sig'] = len(m_g)
+                st.session_state['_rush_g_opened'] = set()
+            _opened_g = st.session_state.get('_rush_g_opened', set())
+            _cols_g = st.columns(min(len(_batches_g), 5))
+            for _i, _batch in enumerate(_batches_g):
+                _s = _i * _MAX_TABS + 1
+                _e = _s + len(_batch) - 1
+                _lbl = f"✅ {_s}–{_e}" if _i in _opened_g else f"🔗 {_s}–{_e}"
+                if _cols_g[_i % len(_cols_g)].button(_lbl, key=f"open_g_b{_i}", use_container_width=True):
+                    for gid in _batch:
+                        force_open_tab(f"https://www.gettyimages.com/search/2/image?phrase={gid}")
+                    st.session_state['_rush_g_opened'] = _opened_g | {_i}
         if f_g:
             found_html = ""
             for gid, loc in f_g:
