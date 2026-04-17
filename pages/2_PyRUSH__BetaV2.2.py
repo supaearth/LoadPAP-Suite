@@ -353,7 +353,7 @@ with st.sidebar:
     st.divider()
     st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);letter-spacing:.12em;color:#555a6a;text-transform:uppercase;margin-bottom:6px;'>2 — โฟลเดอร์</div>", unsafe_allow_html=True)
 
-    if st.button("📁 Source Folder", use_container_width=True):
+    if st.button("📂 เลือกโฟลเดอร์ต้นทาง", use_container_width=True):
         p = get_folder_path("Select Source Folder")
         if p:
             st.session_state.src_folder = p
@@ -362,7 +362,7 @@ with st.sidebar:
             st.rerun()
     st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{st.session_state.src_folder or 'ยังไม่ได้เลือก'}</div>", unsafe_allow_html=True)
 
-    if st.button("🗄️ Archive Folder", use_container_width=True):
+    if st.button("📂 เลือกโฟลเดอร์คลัง", use_container_width=True):
         p = get_folder_path("Select Archive Folder")
         if p:
             st.session_state.archive_folder = p
@@ -371,7 +371,7 @@ with st.sidebar:
             st.rerun()
     st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{st.session_state.archive_folder or 'ยังไม่ได้เลือก'}</div>", unsafe_allow_html=True)
 
-    if st.button("🎯 Destination Folder", use_container_width=True):
+    if st.button("📂 เลือกโฟลเดอร์ปลายทาง", use_container_width=True):
         p = get_folder_path("Select Destination Folder")
         if p:
             st.session_state.dst_folder = p
@@ -381,7 +381,7 @@ with st.sidebar:
     st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{st.session_state.dst_folder or 'ยังไม่ได้เลือก'}</div>", unsafe_allow_html=True)
 
     st.divider()
-    read_btn = st.button("📥 Fetch Jobs", type="primary", use_container_width=True)
+    read_btn = st.button("🚀 เริ่มทำงาน", type="primary", use_container_width=True)
 
 # ============================================================
 # 🖥️ MAIN — HEADER
