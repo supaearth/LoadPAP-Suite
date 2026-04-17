@@ -506,137 +506,128 @@ if 'gemini_key2' not in st.session_state:
     st.session_state.gemini_key2 = _cfg.get('gemini_key2', '')
 
 st.markdown("""
-<div style="height:1px; background:rgba(255,255,255,0.08); margin:32px 0 28px 0;"></div>
+<div style="height:1px; background:rgba(255,255,255,0.08); margin:32px 0 20px 0;"></div>
 <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em;
-  color:#555a6a; text-transform:uppercase; margin-bottom:20px; padding-bottom:8px;
+  color:#555a6a; text-transform:uppercase; margin-bottom:16px; padding-bottom:8px;
   border-bottom:1px solid rgba(255,255,255,0.08);">
-  04 — Gemini API Keys
+  04 — Settings
 </div>
 """, unsafe_allow_html=True)
 
-with st.container(border=True):
-    st.markdown("""
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:15px; font-weight:700;
-      color:#e8eaf0; margin-bottom:4px;">🔑 ตั้งค่า Gemini API Keys</div>
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:13px; color:#8b90a0;
-      line-height:1.6; margin-bottom:8px;">
-      ใส่ครั้งเดียว ระบบจะจำไว้ให้อัตโนมัติ — ใส่ 2 keys เพื่อให้ระบบสลับอัตโนมัติเมื่อ quota หมด
-    </div>
-    """, unsafe_allow_html=True)
+_cfg_col, _acc_col = st.columns(2, gap="medium")
 
-    key_col1, key_col2 = st.columns(2, gap="medium")
-
-    with key_col1:
+# ── Gemini API Keys ──
+with _cfg_col:
+    with st.container(border=True):
+        st.markdown(
+            "<div style='font-family:IBM Plex Mono,monospace;font-size:11px;font-weight:600;"
+            "color:#ffd166;letter-spacing:.06em;margin-bottom:10px;'>🔑 GEMINI API KEYS</div>",
+            unsafe_allow_html=True
+        )
         k1_saved = bool(st.session_state.gemini_key1)
-        new_k1 = st.text_input("Gemini Key 1 — หลัก",
+        new_k1 = st.text_input(
+            "Key 1 — หลัก",
             value=st.session_state.gemini_key1,
-            type="password", placeholder="AIzaSy...", key="input_k1")
-        if k1_saved:
-            st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#2dd4a8;margin-top:-10px;'>● บันทึกแล้ว</div>", unsafe_allow_html=True)
-
-    with key_col2:
+            type="password", placeholder="AIzaSy...", key="input_k1"
+        )
         k2_saved = bool(st.session_state.gemini_key2)
-        new_k2 = st.text_input("Gemini Key 2 — สำรอง (ไม่บังคับ)",
+        new_k2 = st.text_input(
+            "Key 2 — สำรอง",
             value=st.session_state.gemini_key2,
-            type="password", placeholder="AIzaSy...", key="input_k2")
-        if k2_saved:
-            st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#2dd4a8;margin-top:-10px;'>● บันทึกแล้ว</div>", unsafe_allow_html=True)
+            type="password", placeholder="AIzaSy... (ไม่บังคับ)", key="input_k2"
+        )
+        _sc, _bc = st.columns([3, 1], gap="small")
+        with _sc:
+            _status_parts = []
+            if k1_saved: _status_parts.append("Key 1 ✓")
+            if k2_saved: _status_parts.append("Key 2 ✓")
+            _status_txt = " · ".join(_status_parts) if _status_parts else "ยังไม่มี key"
+            _status_clr = "#2dd4a8" if _status_parts else "#555a6a"
+            st.markdown(
+                f"<div style='font-family:IBM Plex Mono,monospace;font-size:10px;"
+                f"color:{_status_clr};padding-top:6px;'>🔒 {_status_txt}</div>",
+                unsafe_allow_html=True
+            )
+        with _bc:
+            _saved = st.button("บันทึก", key="save_keys_btn", use_container_width=True)
+        if _saved:
+            if not new_k1:
+                st.error("❌ กรุณาใส่ Key 1")
+            else:
+                st.session_state.gemini_key1 = new_k1
+                st.session_state.gemini_key2 = new_k2
+                _cfg['gemini_key1'] = new_k1
+                _cfg['gemini_key2'] = new_k2
+                save_config(_cfg)
+                st.success("✅ บันทึกแล้ว!")
 
-    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-    _nc, _bc = st.columns([8.5, 1])
-    with _nc:
-        st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#555a6a;padding-top:8px;'>🔒 เก็บใน config ในเครื่อง ไม่ได้ส่งออกไปที่ไหน</div>", unsafe_allow_html=True)
-    with _bc:
-        _saved = st.button("💾 บันทึก Keys", key="save_keys_btn")
-    if _saved:
-        if not new_k1:
-            st.error("❌ กรุณาใส่ Key 1 ก่อนครับ")
+# ── Google Accounts ──
+with _acc_col:
+    if 'accounts_info' not in st.session_state:
+        st.session_state.accounts_info = get_all_accounts_info()
+
+    with st.container(border=True):
+        st.markdown(
+            "<div style='font-family:IBM Plex Mono,monospace;font-size:11px;font-weight:600;"
+            "color:#4a9eff;letter-spacing:.06em;margin-bottom:10px;'>👤 GOOGLE ACCOUNTS</div>",
+            unsafe_allow_html=True
+        )
+        accounts = st.session_state.accounts_info
+        if not accounts:
+            st.markdown(
+                "<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#555a6a;'>"
+                "ยังไม่มี account</div>",
+                unsafe_allow_html=True
+            )
         else:
-            st.session_state.gemini_key1 = new_k1
-            st.session_state.gemini_key2 = new_k2
-            _cfg['gemini_key1'] = new_k1
-            _cfg['gemini_key2'] = new_k2
-            save_config(_cfg)
-            st.success("✅ บันทึกแล้ว!")
+            for acc in accounts:
+                _ae, _ab1, _ab2 = st.columns([5, 1, 1], gap="small")
+                with _ae:
+                    if acc['active']:
+                        st.markdown(
+                            f"<div style='font-family:IBM Plex Mono,monospace;font-size:11px;"
+                            f"padding:6px 10px;background:rgba(45,212,168,0.08);"
+                            f"border:1px solid rgba(45,212,168,0.25);border-radius:6px;"
+                            f"display:flex;align-items:center;gap:6px;'>"
+                            f"<span style='color:#2dd4a8;font-size:8px;'>●</span>"
+                            f"<span style='color:#2dd4a8;'>{acc['email']}</span></div>",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.markdown(
+                            f"<div style='font-family:IBM Plex Mono,monospace;font-size:11px;"
+                            f"padding:6px 10px;background:#1a1e26;"
+                            f"border:1px solid rgba(255,255,255,0.08);border-radius:6px;"
+                            f"color:#555a6a;'>{acc['email']}</div>",
+                            unsafe_allow_html=True
+                        )
+                with _ab1:
+                    if not acc['active']:
+                        if st.button("Switch", key=f"switch_{acc['idx']}", use_container_width=True):
+                            set_active_account(acc['idx'])
+                            st.session_state.accounts_info = get_all_accounts_info()
+                            st.rerun()
+                with _ab2:
+                    if len(accounts) > 1 or not acc['active']:
+                        if st.button("✕", key=f"remove_{acc['idx']}", use_container_width=True):
+                            remove_account(acc['idx'])
+                            st.session_state.accounts_info = get_all_accounts_info()
+                            st.rerun()
 
-# ============================================================
-# 👤 GOOGLE ACCOUNTS
-# ============================================================
-st.markdown("""
-<div style="height:1px; background:rgba(255,255,255,0.08); margin:32px 0 28px 0;"></div>
-<div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em;
-  color:#555a6a; text-transform:uppercase; margin-bottom:20px; padding-bottom:8px;
-  border-bottom:1px solid rgba(255,255,255,0.08);">
-  05 — Google Accounts
-</div>
-""", unsafe_allow_html=True)
-
-if 'accounts_info' not in st.session_state:
-    st.session_state.accounts_info = get_all_accounts_info()
-
-with st.container(border=True):
-    st.markdown("""
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:15px; font-weight:700;
-      color:#e8eaf0; margin-bottom:4px;">👤 จัดการ Google Accounts</div>
-    <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:13px; color:#8b90a0;
-      line-height:1.6; margin-bottom:12px;">
-      เพิ่มหลาย Account เพื่อให้ระบบค้นหาไฟล์ใน Shared Drive ของทุก email ได้พร้อมกัน
-    </div>
-    """, unsafe_allow_html=True)
-
-    accounts = st.session_state.accounts_info
-    if not accounts:
-        st.markdown("<div style='font-family:IBM Plex Mono,monospace;font-size:12px;color:#555a6a;'>ยังไม่มี account — กด Run แอปครั้งแรกเพื่อ Login</div>", unsafe_allow_html=True)
-    else:
-        for acc in accounts:
-            _ac1, _ac2, _ac3 = st.columns([5, 1, 1], gap="small")
-            with _ac1:
-                if acc['active']:
-                    st.markdown(
-                        f"<div style='font-family:IBM Plex Mono,monospace;font-size:12px;padding:8px 12px;"
-                        f"background:rgba(45,212,168,0.08);border:1px solid rgba(45,212,168,0.25);"
-                        f"border-radius:8px;display:flex;align-items:center;gap:8px;'>"
-                        f"<span style='color:#2dd4a8;font-size:9px;'>●</span>"
-                        f"<span style='color:#2dd4a8;font-weight:600;'>{acc['email']}</span>"
-                        f"<span style='color:#2dd4a8;font-size:10px;margin-left:4px;'>ACTIVE</span></div>",
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.markdown(
-                        f"<div style='font-family:IBM Plex Mono,monospace;font-size:12px;padding:8px 12px;"
-                        f"background:#1a1e26;border:1px solid rgba(255,255,255,0.08);"
-                        f"border-radius:8px;color:#8b90a0;'>{acc['email']}</div>",
-                        unsafe_allow_html=True
-                    )
-            with _ac2:
-                if not acc['active']:
-                    if st.button("Switch", key=f"switch_{acc['idx']}", use_container_width=True):
-                        set_active_account(acc['idx'])
-                        st.session_state.accounts_info = get_all_accounts_info()
-                        st.rerun()
-            with _ac3:
-                if len(accounts) > 1 or not acc['active']:
-                    if st.button("Remove", key=f"remove_{acc['idx']}", use_container_width=True):
-                        remove_account(acc['idx'])
-                        st.session_state.accounts_info = get_all_accounts_info()
-                        st.rerun()
-
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-    if st.button("➕ เพิ่ม Google Account", use_container_width=True):
-        with st.spinner("⏳ กำลังเปิดหน้า Login Google..."):
-            try:
-                new_idx = add_account()
-                st.session_state.accounts_info = get_all_accounts_info()
-                st.success(f"✅ เพิ่ม account สำเร็จ (Account {new_idx})")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ เพิ่ม account ไม่สำเร็จ: {e}")
-
-    st.markdown(
-        "<div style='font-family:IBM Plex Mono,monospace;font-size:10px;color:#555a6a;margin-top:6px;'>"
-        "💡 PyLOAD จะค้นหา Shared Drive ของ account ที่ Active อยู่เท่านั้น — Switch เพื่อเปลี่ยน</div>",
-        unsafe_allow_html=True
-    )
+        if st.button("➕ เพิ่ม Account", use_container_width=True, key="add_acc_btn"):
+            with st.spinner("⏳ กำลังเปิดหน้า Login..."):
+                try:
+                    new_idx = add_account()
+                    st.session_state.accounts_info = get_all_accounts_info()
+                    st.success(f"✅ เพิ่มสำเร็จ")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ {e}")
+        st.markdown(
+            "<div style='font-family:IBM Plex Mono,monospace;font-size:10px;color:#555a6a;margin-top:4px;'>"
+            "💡 PyLOAD ค้นหา Drive ของ account ที่ Active อยู่ — Switch เพื่อเปลี่ยน</div>",
+            unsafe_allow_html=True
+        )
 
 # ============================================================
 # FOOTER
