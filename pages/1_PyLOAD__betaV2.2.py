@@ -718,12 +718,12 @@ if st.session_state.get('triggered'):
                     'reuters': os.path.join(local_dir, "Reuters"),
                     'envato': os.path.join(local_dir, "Envato"),
                     'artlist': os.path.join(local_dir, "Artlist"),
-                    'shutterstock': os.path.join(local_dir, "Shutterstock"),
-                    'youtube': os.path.join(local_dir, "YouTube"),
-                    'facebook': os.path.join(local_dir, "FB"),
-                    'instagram': os.path.join(local_dir, "IG"),
-                    'tiktok': os.path.join(local_dir, "TikTok"),
-                    'x': os.path.join(local_dir, "X"),
+                    'shutterstock': os.path.join(local_dir, "Others"),
+                    'youtube': os.path.join(local_dir, "Social"),
+                    'facebook': os.path.join(local_dir, "Social"),
+                    'instagram': os.path.join(local_dir, "Social"),
+                    'tiktok': os.path.join(local_dir, "Social"),
+                    'x': os.path.join(local_dir, "Social"),
                     'drive': os.path.join(local_dir, "Drive"),
                     'others': os.path.join(local_dir, "Others")
                 }
@@ -847,14 +847,9 @@ if st.session_state.get('triggered'):
             total_reuters = len(raw_data['reuters'])
             total_envato = len(raw_data['envato'])
             total_artlist = len(raw_data['artlist'])
-            total_shutter = len(raw_data['shutterstock'])
-            total_yt = len(raw_data['youtube'])
-            total_fb = len(raw_data['facebook'])
-            total_ig = len(raw_data['instagram'])
-            total_tiktok = len(raw_data['tiktok'])
-            total_x = sum(1 for u in raw_data['others'] if 'x.com' in u.lower() or 'twitter.com' in u.lower())
+            total_social = len(raw_data['youtube']) + len(raw_data['facebook']) + len(raw_data['instagram']) + len(raw_data['tiktok']) + sum(1 for u in raw_data['others'] if 'x.com' in u.lower() or 'twitter.com' in u.lower())
             total_drive = len(raw_data['drive_ids'])
-            total_web = len(raw_data['wiki']) + (len(raw_data['others']) - total_x)
+            total_web = len(raw_data['wiki']) + sum(1 for u in raw_data['others'] if 'x.com' not in u.lower() and 'twitter.com' not in u.lower())
             total_all = sum(len(v) for v in raw_data.values())
             # Project card + stat grid
             def _s(val, color, lbl):
@@ -868,12 +863,7 @@ if st.session_state.get('triggered'):
                 + _s(total_reuters, "#ff7a2f", "Reuters")
                 + _s(total_envato,  "#81B441", "Envato")
                 + _s(total_artlist, "#ffd166", "Artlist")
-                + _s(total_shutter, "#ff4d4d", "Shutter")
-                + _s(total_yt,      "#ff4d4d", "YouTube")
-                + _s(total_fb,      "#1877F2", "FB")
-                + _s(total_ig,      "#E1306C", "IG")
-                + _s(total_tiktok,  "#e8eaf0", "TikTok")
-                + _s(total_x,       "#e8eaf0", "X")
+                + _s(total_social,  "#E1306C", "Social")
                 + _s(total_drive,   "#2dd4a8", "Drive")
                 + _s(total_web,     "#8b90a0", "Web")
             )
@@ -1001,16 +991,13 @@ if st.session_state.get('triggered'):
                 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
                 with st.container(border=True):
                     st.markdown("**📸 Stock อื่นๆ**")
-                    _oc1, _oc2, _oc3 = st.columns(3)
+                    _oc1, _oc2 = st.columns(2)
                     with _oc1:
                         if raw_data['artlist']: make_open_ci_button(raw_data['artlist'], "Artlist", "#FFBE00", full_project_name)
                         else: st.markdown("<span style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#555a6a;'>ไม่มี Artlist</span>", unsafe_allow_html=True)
                     with _oc2:
                         if raw_data['envato']: make_open_ci_button(raw_data['envato'], "Envato", "#81B441", full_project_name)
                         else: st.markdown("<span style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#555a6a;'>ไม่มี Envato</span>", unsafe_allow_html=True)
-                    with _oc3:
-                        if raw_data['shutterstock']: make_open_ci_button(raw_data['shutterstock'], "Shutter", "#EE2B24", full_project_name)
-                        else: st.markdown("<span style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-sm);color:#555a6a;'>ไม่มี Shutter</span>", unsafe_allow_html=True)
 
             # --- Tab 2: Social Media ---
             with tab_social:
