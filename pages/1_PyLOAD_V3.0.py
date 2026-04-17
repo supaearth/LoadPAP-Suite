@@ -539,7 +539,7 @@ st.markdown("""
   <div style="font-size:var(--fs-xl);">🧠</div>
   <div>
     <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-xl);font-weight:700;color:#e8eaf0;line-height:1.1;">PyLOAD</div>
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;margin-top:2px;letter-spacing:.04em;">FOOTAGE DOWNLOADER — BETA 1.2</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;margin-top:2px;letter-spacing:.04em;">FOOTAGE DOWNLOADER </div>
   </div>
 </div>
 <div style="height:1px;background:rgba(255,255,255,0.08);margin:16px 0 20px 0;"></div>

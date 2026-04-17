@@ -185,14 +185,14 @@ with hdr_left:
       <div style="width:50px; height:50px; background:linear-gradient(135deg,#4a9eff,#2dd4a8,#ff7a2f);
         border-radius:11px; display:flex; align-items:center; justify-content:center;
         font-family:'IBM Plex Mono',monospace; font-size:17px; font-weight:700; color:#fff; flex-shrink:0;">
-        LPF
+        LPS
       </div>
       <div>
         <div style="font-family:'IBM Plex Sans Thai',sans-serif; font-size:26px; font-weight:800; color:#e8eaf0; line-height:1.1;">
           LoadPAP Suite
         </div>
         <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#555a6a; margin-top:2px; letter-spacing:0.06em;">
-          LOAD PROCESS AUTOMATION PIPELINE · v2.0
+          LOAD PROCESS AUTOMATION PIPELINE
         </div>
       </div>
     </div>
