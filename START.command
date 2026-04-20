@@ -62,7 +62,7 @@ STREAMLIT_PID=$!
 sleep 3
 
 # เปิด Chrome
-open -a "Google Chrome" "http://localhost:8501" 2>/dev/null || open "http://localhost:8501"
+open "http://localhost:8501"
 
 echo "✅ LoadPAP เปิดแล้วที่ http://localhost:8501"
 echo ""
