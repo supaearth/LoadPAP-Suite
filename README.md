@@ -37,13 +37,13 @@
 
 เปิด Terminal แล้วรัน:
 ```bash
-git clone https://github.com/supaearth/LoadPAP-Suit.git
+git clone https://github.com/supaearth/LoadPAP-Suite.git
 ```
 > ถ้าไม่คุ้นกับ Terminal — กด `Cmd+Space` พิมพ์ **Terminal** แล้วกด Enter
 
 **ทางเลือก B — Download ZIP (ไม่ต้องมี Git)**
 
-กดปุ่ม **Code → Download ZIP** ที่ [github.com/supaearth/LoadPAP-Suit](https://github.com/supaearth/LoadPAP-Suit)
+กดปุ่ม **Code → Download ZIP** ที่ [github.com/supaearth/LoadPAP-Suite](https://github.com/supaearth/LoadPAP-Suite)
 แล้วแตกไฟล์ ZIP ที่ได้
 
 > ⚠️ ถ้าใช้วิธีนี้ START.command จะ **ไม่อัพเดทอัตโนมัติ** — ต้อง Download ZIP ใหม่ทุกครั้งที่มีอัพเดท
