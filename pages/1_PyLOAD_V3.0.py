@@ -957,6 +957,12 @@ if st.session_state.get('triggered'):
                             try:
                                 source_key = 'getty' if code in raw_data['getty'] else 'reuters'
                                 dest_dir = get_dest(path, source_key)
+                                dest_path = os.path.join(dest_dir, os.path.basename(path))
+                                # ไฟล์อยู่ที่เดิมอยู่แล้ว — นับสำเร็จโดยไม่ต้อง copy
+                                if os.path.abspath(path) == os.path.abspath(dest_path):
+                                    st.session_state['success_count'] += 1
+                                    st.session_state['success_urls'].append(f"Local: {os.path.basename(path)[:30]}...")
+                                    continue
                                 shutil.copy2(path, dest_dir)
                                 st.session_state['success_count'] += 1
                                 st.session_state['success_urls'].append(f"Local: {os.path.basename(path)[:30]}...")
