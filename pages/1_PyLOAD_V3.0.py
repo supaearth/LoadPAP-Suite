@@ -290,25 +290,59 @@ def _run_parallel_drive_downloads(found_in_archive, drive_ids, drive_folders,
                                    account_idx, _prog_fn, base_pct=0.35, end_pct=0.55):
     """รวม 3 sources แล้ว download แบบ parallel พร้อม per-file progress"""
 
+    SIZE_LIMIT   = 3 * 1024 ** 3  # 3 GB — เกินนี้ให้ user โหลดเอง
+
+    tasks        = []   # (file_id, dest_path, label) — โหลดอัตโนมัติ
+    skipped      = []   # (fname, webViewLink) — มีใน dest แล้ว
+    large_files  = []   # (fname, webViewLink, size_bytes) — ใหญ่เกิน 3 GB
+
+    def _resolve(file_id, fname_raw, size_str, mime, web_link, source_key):
+        """ตัดสินใจว่าไฟล์นี้จะ: โหลด / ข้าม (มีแล้ว) / ส่ง link (ใหญ่เกิน)"""
+        if mime == 'application/vnd.google-apps.folder':
+            return
+        fname     = sanitize_filename(fname_raw)
+        dest_dir  = get_dest(fname, source_key)
+        dest_path = os.path.join(dest_dir, fname)
+        size      = int(size_str) if size_str else 0
+
+        # 1. มีไฟล์ใน dest แล้ว → ข้าม
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            skipped.append((fname, web_link))
+            return
+
+        # 2. ไฟล์ใหญ่เกิน 3 GB → ส่ง link
+        if size > SIZE_LIMIT:
+            large_files.append((fname, web_link, size))
+            return
+
+        # 3. โหลดปกติ
+        tasks.append((file_id, dest_path, fname))
+
     # ── Phase A: Resolve tasks จากทุก source ──
-    tasks = []  # list of (file_id, dest_path, label)
 
     for code, f_info in found_in_archive.items():
-        fname      = sanitize_filename(f_info['name'])
         source_key = 'getty' if code in raw_data['getty'] else 'reuters'
-        dest_path  = os.path.join(get_dest(fname, source_key), fname)
-        tasks.append((f_info['id'], dest_path, fname))
+        # found_in_archive มาจาก batch_search_drive — ไม่มี size/webViewLink ดึงเพิ่ม
+        try:
+            meta = drive_service.files().get(
+                fileId=f_info['id'], fields='size,webViewLink', supportsAllDrives=True
+            ).execute()
+        except Exception:
+            meta = {}
+        _resolve(f_info['id'], f_info['name'],
+                 meta.get('size'), 'video/mp4',
+                 meta.get('webViewLink', f"https://drive.google.com/file/d/{f_info['id']}/view"),
+                 source_key)
 
     for f_id in drive_ids:
         try:
             f_info = drive_service.files().get(
-                fileId=f_id, fields='name,mimeType', supportsAllDrives=True
+                fileId=f_id, fields='name,mimeType,size,webViewLink', supportsAllDrives=True
             ).execute()
-            if f_info.get('mimeType') == 'application/vnd.google-apps.folder':
-                continue
-            fname     = sanitize_filename(f_info['name'])
-            dest_path = os.path.join(get_dest(fname, 'drive'), fname)
-            tasks.append((f_id, dest_path, fname))
+            _resolve(f_id, f_info.get('name', f_id),
+                     f_info.get('size'), f_info.get('mimeType'),
+                     f_info.get('webViewLink', f"https://drive.google.com/file/d/{f_id}/view"),
+                     'drive')
         except Exception:
             pass
 
@@ -318,19 +352,30 @@ def _run_parallel_drive_downloads(found_in_archive, drive_ids, drive_folders,
                 q=f"'{folder_id}' in parents and trashed=false",
                 corpora='allDrives', supportsAllDrives=True,
                 includeItemsFromAllDrives=True,
-                fields='files(id, name, mimeType)'
+                fields='files(id, name, mimeType, size, webViewLink)'
             ).execute().get('files', [])
             for child in children:
-                if child['mimeType'] == 'application/vnd.google-apps.folder':
-                    continue
-                fname     = sanitize_filename(child['name'])
-                dest_path = os.path.join(get_dest(fname, 'drive'), fname)
-                tasks.append((child['id'], dest_path, fname))
+                _resolve(child['id'], child.get('name', child['id']),
+                         child.get('size'), child.get('mimeType'),
+                         child.get('webViewLink', f"https://drive.google.com/file/d/{child['id']}/view"),
+                         'drive')
         except Exception:
             pass
 
+    # ── แสดงสรุปก่อนเริ่ม ──
+    if skipped:
+        skipped_names = "  |  ".join(f[0][:25] for f in skipped[:6])
+        _prog_fn(f"⏭️ ข้าม {len(skipped)} ไฟล์ (มีใน dest แล้ว): {skipped_names}", "✅", pct=base_pct)
+
+    if large_files:
+        import streamlit as _st
+        _st.warning(f"⚠️ ไฟล์ใหญ่เกิน 3 GB — กรุณาโหลดเองผ่าน Google Drive ({len(large_files)} ไฟล์)")
+        for fname, link, size in large_files:
+            size_gb = size / 1024**3
+            _st.markdown(f"📁 **{fname}** ({size_gb:.1f} GB) — [เปิด Google Drive]({link})")
+
     if not tasks:
-        return 0, []
+        return len(skipped), []
 
     total = len(tasks)
     progress_dict = {}
