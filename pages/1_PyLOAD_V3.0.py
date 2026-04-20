@@ -478,36 +478,35 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
             ext = 'jpg' if _path_ext in FNA_EXTS else _path_ext.lstrip('.')
             temp_path = os.path.join(image_dir, f"temp_{int(time.time()*1000)}.{ext}")
 
+            _origin = '/'.join(clean_url.split('/')[:3])  # https://www.moc.go.th
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Accept': '*/*', 'Referer': 'https://www.google.com/'
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Referer': _origin + '/',
             }
             safe_url = clean_url.replace(' ', '%20')
-            response = requests.get(safe_url, headers=headers, timeout=20, stream=True)
+            response = requests.get(safe_url, headers=headers, timeout=30, stream=True)
             response.raise_for_status()
-
-            # ── Bug 3: validate Content-Type — กันดาวน์โหลด HTML error page ──
-            content_type = response.headers.get('Content-Type', '')
-            if 'image/' not in content_type and 'octet-stream' not in content_type:
-                raise ValueError(f"Content-Type ไม่ใช่รูปภาพ: {content_type}")
 
             with open(temp_path, 'wb') as out_file:
                 for chunk in response.iter_content(chunk_size=8192): out_file.write(chunk)
 
-            # ── Validate ด้วย PIL + detect ext จริงจากไฟล์ ──
+            # ── Validate ด้วย PIL — ถ้าเปิดไม่ได้ = ไม่ใช่รูป (WAF block / HTML page) ──
             try:
                 from PIL import Image as _PILImage
                 with _PILImage.open(temp_path) as _img:
                     _fmt = (_img.format or '').lower()
                     _fmt_map = {'jpeg': 'jpg', 'png': 'png', 'gif': 'gif', 'webp': 'webp'}
                     if _fmt in _fmt_map and _fmt_map[_fmt] != ext:
-                        # ext ไม่ตรงกับ format จริง → rename temp file
                         ext = _fmt_map[_fmt]
                         new_temp = os.path.splitext(temp_path)[0] + f'.{ext}'
                         os.rename(temp_path, new_temp)
                         temp_path = new_temp
             except Exception:
-                pass  # PIL อาจ fail บนไฟล์บางประเภท — ใช้ ext เดิม
+                # PIL เปิดไม่ได้ = ได้รับ HTML หรือไฟล์พัง → ทิ้ง
+                if temp_path and os.path.exists(temp_path): os.remove(temp_path)
+                raise ValueError("ไฟล์ที่ดาวน์โหลดมาไม่ใช่รูปภาพ (อาจถูก WAF บล็อก)")
 
             ai_name = get_ai_caption(temp_path, gemini_key, source_tag)
             tracker_key = extract_handle_from_url(clean_url) or raw_name_stem
