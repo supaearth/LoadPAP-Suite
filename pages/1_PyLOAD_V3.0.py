@@ -155,10 +155,15 @@ def display_social_link(url, icon_url, platform_name):
 # select_folder_mac → ใช้จาก utils.py แล้ว
 
 def build_local_index(folder_path):
-    """Walk directory ครั้งเดียว → dict {lowercase_filename: full_path}"""
+    """Walk directory ครั้งเดียว → dict {lowercase_filename: full_path}
+    ข้าม package directories ของ macOS (.fcpbundle, .app, .fcpx ฯลฯ)
+    """
     if not folder_path or not os.path.exists(folder_path): return {}
+    SKIP_EXTS = {'.fcpbundle', '.fcpx', '.app', '.bundle', '.photoslibrary', '.mlpackage'}
     index = {}
     for root, dirs, files in os.walk(folder_path):
+        # ตัด package dirs ออกก่อน walk ลงไป (in-place เพื่อให้ os.walk ข้ามทันที)
+        dirs[:] = [d for d in dirs if os.path.splitext(d)[1].lower() not in SKIP_EXTS]
         for f in files:
             index[f.lower()] = os.path.join(root, f)
     return index
@@ -771,7 +776,9 @@ if st.session_state.get('triggered'):
 
                     # ── Build local index ครั้งเดียว (cache ใน session) ──
                     _idx_key = f"local_idx_{local_archive_dir}"
-                    if local_archive_dir and _idx_key not in st.session_state:
+                    # ล้าง cache เก่าที่อาจมี .fcpbundle path ค้างอยู่
+                    st.session_state.pop(_idx_key, None)
+                    if local_archive_dir:
                         st.session_state[_idx_key] = build_local_index(local_archive_dir)
                     local_index = st.session_state.get(_idx_key, {}) if local_archive_dir else {}
 
@@ -839,9 +846,6 @@ if st.session_state.get('triggered'):
                         _prog(f"ขั้นที่ 1/4 — ก๊อปไฟล์เก่าจากฮาร์ดดิสก์ ({len(st.session_state['found_in_local'])} ไฟล์)", "📂", pct=0.15)
                         for code, path in st.session_state['found_in_local'].items():
                             try:
-                                if not os.path.exists(path):
-                                    st.warning(f"⚠️ ไม่พบไฟล์ local: {path}")
-                                    continue
                                 source_key = 'getty' if code in raw_data['getty'] else 'reuters'
                                 dest_dir = get_dest(path, source_key)
                                 shutil.copy2(path, dest_dir)
