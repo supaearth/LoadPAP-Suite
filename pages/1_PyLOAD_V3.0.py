@@ -453,21 +453,29 @@ def get_ai_caption(file_path, api_key, source_tag):
 def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
     clean_url = url.split('"')[0].strip()
     source_tag = get_source_tag(clean_url)
-    raw_filename = clean_url.split('/')[-1].split('?')[0]
-    # ตัด extension ออก เพื่อป้องกัน "photo.jpg_Web.jpg"
+
+    # ── Parse URL อย่างถูกต้อง ป้องกัน & ปน ext ──
+    from urllib.parse import urlparse
+    _parsed   = urlparse(clean_url)
+    _url_path_only = _parsed.path  # path ไม่มี query string เลย
+
+    raw_filename = _url_path_only.split('/')[-1]  # ชื่อไฟล์จาก path จริง
     raw_name_stem = os.path.splitext(raw_filename)[0]
     if len(raw_name_stem) < 3: raw_name_stem = f"file_{int(time.time()*1000)}"
-    if len(raw_filename) < 5: raw_filename = f"file_{int(time.time()*1000)}"
-    
+    if len(raw_filename) < 5:  raw_filename  = f"file_{int(time.time()*1000)}"
+
+    # .fna = Facebook CDN JPEG format → treat เป็น jpg
+    FNA_EXTS      = {'.fna'}
     image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']
     temp_path = None
-    
+
     # 💡 1. โหลดรูปภาพ
-    # ตรวจ extension จาก path ก่อน query string (รองรับ URL ที่มี path ยาวเช่น /file/get/file/xxx.jpg)
-    _url_path = clean_url.lower().split('?')[0]
-    if any(_url_path.endswith(ext) or f'{ext}' in _url_path.split('/')[-1] for ext in image_extensions):
+    _path_ext = os.path.splitext(_url_path_only.lower())[1]  # ext จาก path จริง
+    _is_image = _path_ext in image_extensions or _path_ext in FNA_EXTS
+    if _is_image:
         try:
-            ext = clean_url.split('.')[-1].split('?')[0].lower()
+            # normalize ext: .fna → .jpg
+            ext = 'jpg' if _path_ext in FNA_EXTS else _path_ext.lstrip('.')
             temp_path = os.path.join(image_dir, f"temp_{int(time.time()*1000)}.{ext}")
 
             headers = {
@@ -486,21 +494,35 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
             with open(temp_path, 'wb') as out_file:
                 for chunk in response.iter_content(chunk_size=8192): out_file.write(chunk)
 
+            # ── Validate ด้วย PIL + detect ext จริงจากไฟล์ ──
+            try:
+                from PIL import Image as _PILImage
+                with _PILImage.open(temp_path) as _img:
+                    _fmt = (_img.format or '').lower()
+                    _fmt_map = {'jpeg': 'jpg', 'png': 'png', 'gif': 'gif', 'webp': 'webp'}
+                    if _fmt in _fmt_map and _fmt_map[_fmt] != ext:
+                        # ext ไม่ตรงกับ format จริง → rename temp file
+                        ext = _fmt_map[_fmt]
+                        new_temp = os.path.splitext(temp_path)[0] + f'.{ext}'
+                        os.rename(temp_path, new_temp)
+                        temp_path = new_temp
+            except Exception:
+                pass  # PIL อาจ fail บนไฟล์บางประเภท — ใช้ ext เดิม
+
             ai_name = get_ai_caption(temp_path, gemini_key, source_tag)
-            # ── Bug 4: ใช้ raw_name_stem (ไม่มี extension) กันชื่อซ้อน เช่น photo.jpg_Web.jpg ──
             tracker_key = extract_handle_from_url(clean_url) or raw_name_stem
             safe_tracker_key = sanitize_filename(tracker_key)
 
             if ai_name: final_name = f"{ai_name}_{safe_tracker_key}.{ext}"
             else: final_name = f"{safe_tracker_key}_{source_tag}.{ext}"
-            
+
             final_path = os.path.join(image_dir, final_name)
             counter = 1
             while os.path.exists(final_path):
                 name_part = final_name.rsplit('.', 1)[0]
                 final_path = os.path.join(image_dir, f"{name_part}_{counter}.{ext}")
                 counter += 1
-                
+
             shutil.move(temp_path, final_path)
             return True, clean_url
         except Exception as e:
