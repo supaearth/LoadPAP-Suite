@@ -295,6 +295,9 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
     clean_url = url.split('"')[0].strip()
     source_tag = get_source_tag(clean_url)
     raw_filename = clean_url.split('/')[-1].split('?')[0]
+    # ตัด extension ออก เพื่อป้องกัน "photo.jpg_Web.jpg"
+    raw_name_stem = os.path.splitext(raw_filename)[0]
+    if len(raw_name_stem) < 3: raw_name_stem = f"file_{int(time.time()*1000)}"
     if len(raw_filename) < 5: raw_filename = f"file_{int(time.time()*1000)}"
     
     image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']
@@ -305,7 +308,7 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
         try:
             ext = clean_url.split('.')[-1].split('?')[0].lower()
             temp_path = os.path.join(image_dir, f"temp_{int(time.time()*1000)}.{ext}")
-            
+
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
                 'Accept': '*/*', 'Referer': 'https://www.google.com/'
@@ -313,14 +316,20 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
             safe_url = clean_url.replace(' ', '%20')
             response = requests.get(safe_url, headers=headers, timeout=20, stream=True)
             response.raise_for_status()
-            
+
+            # ── Bug 3: validate Content-Type — กันดาวน์โหลด HTML error page ──
+            content_type = response.headers.get('Content-Type', '')
+            if 'image/' not in content_type and 'octet-stream' not in content_type:
+                raise ValueError(f"Content-Type ไม่ใช่รูปภาพ: {content_type}")
+
             with open(temp_path, 'wb') as out_file:
                 for chunk in response.iter_content(chunk_size=8192): out_file.write(chunk)
-            
+
             ai_name = get_ai_caption(temp_path, gemini_key, source_tag)
-            tracker_key = extract_handle_from_url(clean_url) or raw_filename
+            # ── Bug 4: ใช้ raw_name_stem (ไม่มี extension) กันชื่อซ้อน เช่น photo.jpg_Web.jpg ──
+            tracker_key = extract_handle_from_url(clean_url) or raw_name_stem
             safe_tracker_key = sanitize_filename(tracker_key)
-            
+
             if ai_name: final_name = f"{ai_name}_{safe_tracker_key}.{ext}"
             else: final_name = f"{safe_tracker_key}_{source_tag}.{ext}"
             
@@ -637,7 +646,7 @@ if st.session_state.get('triggered'):
             if 'data_cache' not in st.session_state or run_btn or st.session_state['data_cache'] is None:
                 data = {
                     'getty': [], 'reuters': [], 'artlist': [], 'envato': [], 'shutterstock': [], 
-                    'wiki': [], 'youtube': [], 'facebook': [], 'instagram': [], 'tiktok': [], 'others': [], 'drive_ids': []
+                    'wiki': [], 'youtube': [], 'facebook': [], 'instagram': [], 'tiktok': [], 'others': [], 'drive_ids': [], 'drive_folders': []
                 }
 
                 def classify_url(url):
@@ -652,9 +661,14 @@ if st.session_state.get('triggered'):
                                 return
                     
                     if 'drive.google.com' in url:
-                        dr_id = extract_id(url) # ใช้ฟังก์ชัน extract_id ที่พี่เขียนไว้ตอนต้น
-                        if dr_id and dr_id not in data['drive_ids']:
-                            data['drive_ids'].append(dr_id)
+                        dr_id = extract_id(url)
+                        if dr_id:
+                            if '/folders/' in url:   # ── Folder → list ไฟล์ข้างใน
+                                if dr_id not in data['drive_folders']:
+                                    data['drive_folders'].append(dr_id)
+                            else:                    # ── ไฟล์ปกติ
+                                if dr_id not in data['drive_ids']:
+                                    data['drive_ids'].append(dr_id)
                     elif 'gettyimages' in url:
                         # 💡 THE FIX: ให้ดึงรหัสทุกรูปแบบที่อยู่ท้ายลิงก์ (รองรับตัวอักษรและขีด)
                         m = re.search(r'/detail/[^/]+/([a-zA-Z0-9_-]+)', url)
@@ -825,10 +839,17 @@ if st.session_state.get('triggered'):
                         _prog(f"ขั้นที่ 1/4 — ก๊อปไฟล์เก่าจากฮาร์ดดิสก์ ({len(st.session_state['found_in_local'])} ไฟล์)", "📂", pct=0.15)
                         for code, path in st.session_state['found_in_local'].items():
                             try:
+                                if not os.path.exists(path):
+                                    st.warning(f"⚠️ ไม่พบไฟล์ local: {path}")
+                                    continue
                                 source_key = 'getty' if code in raw_data['getty'] else 'reuters'
-                                shutil.copy2(path, get_dest(path, source_key))
-                            except (OSError, shutil.Error) as e:
-                                print(f"Warning: copy failed for {code}: {e}")
+                                dest_dir = get_dest(path, source_key)
+                                shutil.copy2(path, dest_dir)
+                                st.session_state['success_count'] += 1
+                                st.session_state['success_urls'].append(f"Local: {os.path.basename(path)[:30]}...")
+                            except Exception as e:
+                                st.error(f"❌ copy ล้มเหลว [{code}]: {e}")
+                                st.session_state['failed']['drive'].append(code)
 
                     if st.session_state['found_in_archive']:
                         _prog(f"ขั้นที่ 2/4 — ดึงไฟล์เก่าจาก Drive Archive ({len(st.session_state['found_in_archive'])} ไฟล์)", "☁️", pct=0.35)
@@ -851,19 +872,49 @@ if st.session_state.get('triggered'):
                         _prog(f"ขั้นที่ 2.5/4 — ดาวน์โหลดไฟล์ Google Drive ใหม่ ({len(raw_data['drive_ids'])} ไฟล์)", "📁", pct=0.5)
                         for f_id in raw_data['drive_ids']:
                             try:
-                                f_info = drive_service.files().get(fileId=f_id, fields='name', supportsAllDrives=True).execute()
+                                f_info = drive_service.files().get(fileId=f_id, fields='name,mimeType', supportsAllDrives=True).execute()
+                                if f_info.get('mimeType') == 'application/vnd.google-apps.folder':
+                                    st.warning(f"⚠️ {f_id} เป็น Folder — ใช้ drive_folders แทน")
+                                    continue
                                 request = drive_service.files().get_media(fileId=f_id)
                                 fname = sanitize_filename(f_info['name'])
-                                
+
                                 fh = io.FileIO(os.path.join(get_dest(fname, 'drive'), fname), 'wb')
                                 downloader = MediaIoBaseDownload(fh, request)
                                 done = False
                                 while not done: _, done = downloader.next_chunk()
-                                
+
                                 st.session_state['success_count'] += 1
                                 st.session_state['success_urls'].append(f"Drive: {fname[:30]}...")
-                            except Exception as e: 
+                            except Exception as e:
                                 st.session_state['failed']['drive'].append(f_id)
+
+                    if raw_data.get('drive_folders'):
+                        _prog(f"ขั้นที่ 2.6/4 — ดึงไฟล์จาก Drive Folder ({len(raw_data['drive_folders'])} โฟลเดอร์)", "📂", pct=0.55)
+                        for folder_id in raw_data['drive_folders']:
+                            try:
+                                children = drive_service.files().list(
+                                    q=f"'{folder_id}' in parents and trashed=false",
+                                    corpora='allDrives', supportsAllDrives=True,
+                                    includeItemsFromAllDrives=True,
+                                    fields='files(id, name, mimeType)'
+                                ).execute().get('files', [])
+                                for child in children:
+                                    if child['mimeType'] == 'application/vnd.google-apps.folder':
+                                        continue  # ข้าม sub-folder
+                                    try:
+                                        req = drive_service.files().get_media(fileId=child['id'])
+                                        fname = sanitize_filename(child['name'])
+                                        fh = io.FileIO(os.path.join(get_dest(fname, 'drive'), fname), 'wb')
+                                        dl = MediaIoBaseDownload(fh, req)
+                                        done = False
+                                        while not done: _, done = dl.next_chunk()
+                                        st.session_state['success_count'] += 1
+                                        st.session_state['success_urls'].append(f"Drive: {fname[:30]}...")
+                                    except Exception as ec:
+                                        st.session_state['failed']['drive'].append(child['id'])
+                            except Exception as e:
+                                st.session_state['failed']['drive'].append(folder_id)
 
                     # กรองลิงก์ซ้ำเด็ดขาดก่อนโยนให้ thread
                     social_links = []
