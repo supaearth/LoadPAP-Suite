@@ -23,7 +23,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css
+from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css, get_active_account_index
 
 # ==========================================
 # 🛡️ 0. INITIALIZATION
@@ -260,6 +260,115 @@ def extract_handle_from_url(url):
 # 🧠 2. DOWNLOAD ENGINE (Filename Fixer & AI)
 # ==========================================
 # sanitize_filename → ใช้จาก utils.py แล้ว
+
+def _download_drive_file(file_id: str, dest_path: str, account_idx: int,
+                         progress_dict: dict, label: str):
+    """Thread-safe Drive downloader — สร้าง service ของตัวเองไม่แชร์กับ thread อื่น"""
+    try:
+        from googleapiclient.discovery import build as _build
+        from utils import get_g_creds
+        CHUNK = 10 * 1024 * 1024  # 10 MB — balance ระหว่าง progress granularity กับ overhead
+        svc = _build('drive', 'v3', credentials=get_g_creds(account_idx))
+        req = svc.files().get_media(fileId=file_id)
+        progress_dict[file_id] = (0.0, label)
+        with io.FileIO(dest_path, 'wb') as fh:
+            dl = MediaIoBaseDownload(fh, req, chunksize=CHUNK)
+            done = False
+            while not done:
+                status, done = dl.next_chunk()
+                pct = status.progress() if status else (1.0 if done else 0.0)
+                progress_dict[file_id] = (pct, label)
+        progress_dict[file_id] = (1.0, label)
+        return True, file_id, None
+    except Exception as e:
+        progress_dict[file_id] = (-1.0, label)
+        return False, file_id, str(e)
+
+
+def _run_parallel_drive_downloads(found_in_archive, drive_ids, drive_folders,
+                                   raw_data, get_dest, dirs, drive_service,
+                                   account_idx, _prog_fn, base_pct=0.35, end_pct=0.55):
+    """รวม 3 sources แล้ว download แบบ parallel พร้อม per-file progress"""
+
+    # ── Phase A: Resolve tasks จากทุก source ──
+    tasks = []  # list of (file_id, dest_path, label)
+
+    for code, f_info in found_in_archive.items():
+        fname      = sanitize_filename(f_info['name'])
+        source_key = 'getty' if code in raw_data['getty'] else 'reuters'
+        dest_path  = os.path.join(get_dest(fname, source_key), fname)
+        tasks.append((f_info['id'], dest_path, fname))
+
+    for f_id in drive_ids:
+        try:
+            f_info = drive_service.files().get(
+                fileId=f_id, fields='name,mimeType', supportsAllDrives=True
+            ).execute()
+            if f_info.get('mimeType') == 'application/vnd.google-apps.folder':
+                continue
+            fname     = sanitize_filename(f_info['name'])
+            dest_path = os.path.join(get_dest(fname, 'drive'), fname)
+            tasks.append((f_id, dest_path, fname))
+        except Exception:
+            pass
+
+    for folder_id in drive_folders:
+        try:
+            children = drive_service.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                corpora='allDrives', supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                fields='files(id, name, mimeType)'
+            ).execute().get('files', [])
+            for child in children:
+                if child['mimeType'] == 'application/vnd.google-apps.folder':
+                    continue
+                fname     = sanitize_filename(child['name'])
+                dest_path = os.path.join(get_dest(fname, 'drive'), fname)
+                tasks.append((child['id'], dest_path, fname))
+        except Exception:
+            pass
+
+    if not tasks:
+        return 0, []
+
+    total = len(tasks)
+    progress_dict = {}
+    _prog_fn(f"Drive Downloads — 0/{total} ไฟล์", "☁️", pct=base_pct)
+
+    # ── Phase B & C: Parallel dispatch + main-thread progress ──
+    MAX_WORKERS = min(6, total)
+    success_count = 0
+    failed_ids    = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_map = {
+            executor.submit(_download_drive_file, fid, dest, account_idx, progress_dict, label): (fid, label)
+            for fid, dest, label in tasks
+        }
+        completed = 0
+        for future in concurrent.futures.as_completed(future_map):
+            fid, label = future_map[future]
+            completed += 1
+            try:
+                ok, _, err = future.result(timeout=600)
+                if ok: success_count += 1
+                else: failed_ids.append(fid)
+            except Exception:
+                failed_ids.append(fid)
+
+            # สร้าง progress summary จาก 4 ไฟล์ล่าสุด
+            snippets = []
+            for v_pct, v_label in list(progress_dict.values())[-4:]:
+                if v_pct >= 1.0:   icon = "✅"
+                elif v_pct < 0:    icon = "❌"
+                else:              icon = f"{int(v_pct*100)}%"
+                snippets.append(f"{v_label[:20]} {icon}")
+            summary = "  |  ".join(snippets)
+            cur_pct = base_pct + (completed / total) * (end_pct - base_pct)
+            _prog_fn(f"Drive — {completed}/{total}  {summary}", "☁️", pct=cur_pct)
+
+    return success_count, failed_ids
 
 def get_source_tag(url):
     url_lower = url.lower()
@@ -855,70 +964,24 @@ if st.session_state.get('triggered'):
                                 st.error(f"❌ copy ล้มเหลว [{code}]: {e}")
                                 st.session_state['failed']['drive'].append(code)
 
-                    if st.session_state['found_in_archive']:
-                        _prog(f"ขั้นที่ 2/4 — ดึงไฟล์เก่าจาก Drive Archive ({len(st.session_state['found_in_archive'])} ไฟล์)", "☁️", pct=0.35)
-                        for code, f_info in st.session_state['found_in_archive'].items():
-                            try:
-                                req = drive_service.files().get_media(fileId=f_info['id'])
-                                fname = sanitize_filename(f_info['name'])
-                                source_key = 'getty' if code in raw_data['getty'] else 'reuters'
-                                dest_path = os.path.join(get_dest(fname, source_key), fname)
-                                with io.FileIO(dest_path, 'wb') as fh:
-                                    downloader = MediaIoBaseDownload(fh, req)
-                                    done = False
-                                    while not done:
-                                          _, done = downloader.next_chunk()
-
-                            except Exception as e:
-                                st.session_state['failed']['drive'].append(code)
-                    
-                    if raw_data['drive_ids']:
-                        _prog(f"ขั้นที่ 2.5/4 — ดาวน์โหลดไฟล์ Google Drive ใหม่ ({len(raw_data['drive_ids'])} ไฟล์)", "📁", pct=0.5)
-                        for f_id in raw_data['drive_ids']:
-                            try:
-                                f_info = drive_service.files().get(fileId=f_id, fields='name,mimeType', supportsAllDrives=True).execute()
-                                if f_info.get('mimeType') == 'application/vnd.google-apps.folder':
-                                    st.warning(f"⚠️ {f_id} เป็น Folder — ใช้ drive_folders แทน")
-                                    continue
-                                request = drive_service.files().get_media(fileId=f_id)
-                                fname = sanitize_filename(f_info['name'])
-
-                                fh = io.FileIO(os.path.join(get_dest(fname, 'drive'), fname), 'wb')
-                                downloader = MediaIoBaseDownload(fh, request)
-                                done = False
-                                while not done: _, done = downloader.next_chunk()
-
-                                st.session_state['success_count'] += 1
-                                st.session_state['success_urls'].append(f"Drive: {fname[:30]}...")
-                            except Exception as e:
-                                st.session_state['failed']['drive'].append(f_id)
-
-                    if raw_data.get('drive_folders'):
-                        _prog(f"ขั้นที่ 2.6/4 — ดึงไฟล์จาก Drive Folder ({len(raw_data['drive_folders'])} โฟลเดอร์)", "📂", pct=0.55)
-                        for folder_id in raw_data['drive_folders']:
-                            try:
-                                children = drive_service.files().list(
-                                    q=f"'{folder_id}' in parents and trashed=false",
-                                    corpora='allDrives', supportsAllDrives=True,
-                                    includeItemsFromAllDrives=True,
-                                    fields='files(id, name, mimeType)'
-                                ).execute().get('files', [])
-                                for child in children:
-                                    if child['mimeType'] == 'application/vnd.google-apps.folder':
-                                        continue  # ข้าม sub-folder
-                                    try:
-                                        req = drive_service.files().get_media(fileId=child['id'])
-                                        fname = sanitize_filename(child['name'])
-                                        fh = io.FileIO(os.path.join(get_dest(fname, 'drive'), fname), 'wb')
-                                        dl = MediaIoBaseDownload(fh, req)
-                                        done = False
-                                        while not done: _, done = dl.next_chunk()
-                                        st.session_state['success_count'] += 1
-                                        st.session_state['success_urls'].append(f"Drive: {fname[:30]}...")
-                                    except Exception as ec:
-                                        st.session_state['failed']['drive'].append(child['id'])
-                            except Exception as e:
-                                st.session_state['failed']['drive'].append(folder_id)
+                    # ── Drive Downloads (archive + ids + folders) แบบ parallel ──
+                    if st.session_state['found_in_archive'] or raw_data['drive_ids'] or raw_data.get('drive_folders'):
+                        _acct = get_active_account_index()
+                        _ok, _failed = _run_parallel_drive_downloads(
+                            found_in_archive = st.session_state['found_in_archive'],
+                            drive_ids        = raw_data['drive_ids'],
+                            drive_folders    = raw_data.get('drive_folders', []),
+                            raw_data         = raw_data,
+                            get_dest         = get_dest,
+                            dirs             = dirs,
+                            drive_service    = drive_service,
+                            account_idx      = _acct,
+                            _prog_fn         = _prog,
+                            base_pct         = 0.35,
+                            end_pct          = 0.55,
+                        )
+                        st.session_state['success_count'] += _ok
+                        st.session_state['failed']['drive'].extend(_failed)
 
                     # กรองลิงก์ซ้ำเด็ดขาดก่อนโยนให้ thread
                     social_links = []

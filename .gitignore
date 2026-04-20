@@ -31,3 +31,9 @@ env/
 
 # --- ไฟล์ temp ที่โปรแกรมสร้าง ---
 *.tmp
+
+echo "__pycache__/" >> .gitignore
+echo ".claude/" >> .gitignore
+git add .gitignore
+git commit -m "add .claude to gitignore"
+git push origin dev
