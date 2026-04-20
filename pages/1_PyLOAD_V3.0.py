@@ -463,7 +463,9 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
     temp_path = None
     
     # 💡 1. โหลดรูปภาพ
-    if any(clean_url.lower().split('?')[0].endswith(ext) for ext in image_extensions):
+    # ตรวจ extension จาก path ก่อน query string (รองรับ URL ที่มี path ยาวเช่น /file/get/file/xxx.jpg)
+    _url_path = clean_url.lower().split('?')[0]
+    if any(_url_path.endswith(ext) or f'{ext}' in _url_path.split('/')[-1] for ext in image_extensions):
         try:
             ext = clean_url.split('.')[-1].split('?')[0].lower()
             temp_path = os.path.join(image_dir, f"temp_{int(time.time()*1000)}.{ext}")
@@ -812,9 +814,9 @@ if st.session_state.get('triggered'):
                     if not url or len(url) < 10: return
                     url = url.strip().strip('[]() " \' ,\\')
                     
-                    # 💡 ดักจับรูปภาพ Facebook ก่อนเลย
+                    # 💡 ดักจับรูปภาพ Facebook ก่อนเลย (/photo/ และ /photos/)
                     if 'facebook.com' in url.lower():
-                        if '/photos/' in url or '/posts/' in url:
+                        if re.search(r'/photos?/', url, re.IGNORECASE) or '/posts/' in url:
                             if 'video' not in url.lower():
                                 # ถ้าเป็นรูป ไม่ต้องเพิ่มลงใน data['facebook']
                                 return
@@ -842,7 +844,9 @@ if st.session_state.get('triggered'):
                     elif 'instagram.com' in url: data['instagram'].append(url)
                     elif 'tiktok.com' in url: data['tiktok'].append(url)
                     elif 'x.com' in url or 'twitter.com' in url: data['others'].append(url)
-                    else: data['others'].append(url) 
+                    # 💡 URL ที่ path ลงท้ายด้วย image extension → others (download_worker จะจัดการ)
+                    elif any(url.lower().split('?')[0].endswith(ext) for ext in ['.jpg','.jpeg','.png','.gif','.webp','.svg']): data['others'].append(url)
+                    else: data['others'].append(url)
 
                 with st.sidebar.spinner("🔍 กำลังสแกนเอกสาร Google Doc..."):
                     doc = docs_service.documents().get(documentId=doc_id).execute()
