@@ -7,6 +7,7 @@
 credentials.json
 vmaster_config.json
 token.pickle
+token_*.pickle
 
 # --- Python cache ---
 __pycache__/
