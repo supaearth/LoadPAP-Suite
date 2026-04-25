@@ -34,7 +34,7 @@ def init_session_state():
         'failed': {'drive': [], 'getty': [], 'reuters': [], 'social': [], 'others': []},
         'success_urls': [], 'success_count': 0, 'data_cache': None,
         'found_in_local': {}, 'found_in_archive': {}, 'duplicates': {'getty': [], 'reuters': []},
-        'triggered': False, 'run_complete': False, 
+        'triggered': False, 'run_complete': False, 'run_id': 0,
         'start_time': None, 'elapsed_time': 0, 'current_project_path': "",
         'local_archive': "", 'last_doc': "", 'last_ep': "", 'last_p_type': "Global Focus",
         'history_data': []
@@ -91,7 +91,8 @@ def make_open_ci_button(urls, button_text, color_hex, project_name):
     else:
         batches = [valid_urls[i:i+MAX_OPEN_TABS] for i in range(0, total, MAX_OPEN_TABS)]
         n = len(batches)
-        safe_key = re.sub(r'[^\w]', '_', button_text + '_' + project_name[:15])[:40]
+        run_id = st.session_state.get('run_id', 0)
+        safe_key = re.sub(r'[^\w]', '_', button_text + '_' + project_name[:15])[:40] + f'_r{run_id}'
 
         buttons_html = ""
         restore_js_parts = []
@@ -803,7 +804,8 @@ st.markdown("""
 
 if run_btn:
     st.session_state['triggered'] = True
-    st.session_state['run_complete'] = False 
+    st.session_state['run_complete'] = False
+    st.session_state['run_id'] = st.session_state.get('run_id', 0) + 1
     st.session_state['last_doc'] = doc_url
     st.session_state['last_ep'] = ep_name
     st.session_state['last_p_type'] = p_type
