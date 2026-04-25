@@ -437,6 +437,8 @@ st.markdown(
 # 📥 FETCH JOBS
 # ============================================================
 if read_btn and sheet_url:
+    for _k in ('_rush_r_opened', '_rush_g_opened', '_rush_r_sig', '_rush_g_sig'):
+        st.session_state.pop(_k, None)
     with st.spinner("📥 กำลังดึงข้อมูลและค้นหาไฟล์..."):
         try:
             service = get_sheets_service()
