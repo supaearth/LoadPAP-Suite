@@ -664,10 +664,11 @@ def parse_doc_brief(text: str) -> Optional[RecBrief]:
         src_m = re.search(r'ลิงก์คลิปต้นทาง[^\n]*\n+([^\n]+)', text)
     if src_m:
         raw_source = src_m.group(1).strip()
-        if 'drive.google.com' in raw_source or 'docs.google.com' in raw_source:
+        if raw_source.startswith("http"):
+            # เป็น URL → extract file ID แล้ว download ตรง ไม่ต้องค้น Drive
             file_id = extract_id(raw_source)
         else:
-            # plain filename เช่น "REC_0505.mp4"
+            # plain filename เช่น "REC_0505.mp4" → ค้นใน Drive
             filename = raw_source
 
     if not raw_source:
@@ -790,9 +791,11 @@ def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str, log) -> dict
     os.makedirs(out_dir, exist_ok=True)
 
     # ── Step 1: Resolve video file ─────────────────────────────
-    log("🔎 ค้นหาไฟล์วิดีโอใน Google Drive...")
     file_id = brief.file_id
-    if not file_id and brief.filename:
+    if file_id:
+        log(f"🔗 ใช้ Drive link จาก Doc โดยตรง")
+    elif brief.filename:
+        log(f"🔎 ค้นหาไฟล์ '{brief.filename}' ใน Drive...")
         file_id = _search_drive_by_name(brief.filename, log)
     if not file_id:
         res["error"] = (
