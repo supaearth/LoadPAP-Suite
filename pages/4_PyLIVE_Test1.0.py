@@ -636,7 +636,7 @@ def parse_doc_brief(text: str) -> Optional[RecBrief]:
     รองรับ format:
       ปก : 'title'
       Caption / แคปชั่น : ...
-      ลิงก์คลิปต้นทาง → บรรทัดถัดไป = Drive URL หรือชื่อไฟล์
+      ลิงก์คลิปต้นทาง: <Drive URL หรือชื่อไฟล์>  ← หลักแนวเดียวกัน, fallback บรรทัดถัดไป
       Tc / TC : → บรรทัดถัดไปเป็น TC segments
     """
     # ── cover ──────────────────────────────────────────────
@@ -655,8 +655,13 @@ def parse_doc_brief(text: str) -> Optional[RecBrief]:
     caption = caption_m.group(1).strip() if caption_m else ""
 
     # ── video source (Drive link หรือชื่อไฟล์) ────────────
+    # รองรับ 2 format:
+    #   "ลิงก์คลิปต้นทาง: <value>"  (หลัง colon บรรทัดเดียวกัน) ← หลัก
+    #   "ลิงก์คลิปต้นทาง\n<value>"  (บรรทัดถัดไป)                ← fallback
     raw_source, file_id, filename = "", None, None
-    src_m = re.search(r'ลิงก์คลิปต้นทาง[^\n]*\n+([^\n]+)', text)
+    src_m = re.search(r'ลิงก์คลิปต้นทาง\s*:\s*([^\n]+)', text)
+    if not src_m:
+        src_m = re.search(r'ลิงก์คลิปต้นทาง[^\n]*\n+([^\n]+)', text)
     if src_m:
         raw_source = src_m.group(1).strip()
         if 'drive.google.com' in raw_source or 'docs.google.com' in raw_source:
