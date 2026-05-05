@@ -1,11 +1,11 @@
 """
 PyL.I.V.E. — Live Intelligence Video Extractor
-V4.0
+V4.1
 
 วาง file นี้ที่: pages/4_PyLIVE_Test1.0.py
 """
 
-import sys, os, re, time, shutil, subprocess, tempfile, json, datetime
+import sys, os, re, time, shutil, subprocess, tempfile, json, datetime, io
 import streamlit as st
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,22 +13,24 @@ from typing import Optional
 
 import yt_dlp
 from PIL import Image
+from googleapiclient.http import MediaIoBaseDownload
 
-# ── Path setup ──────────────────────────────────────────────
+# ── Path setup ───────────────────────────────────────────────
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-from utils import load_config, inject_global_css
+from utils import (load_config, inject_global_css,
+                   get_docs_service, get_drive_service, extract_id)
 
 # ============================================================
 # 0.  CONSTANTS
 # ============================================================
 SAFETY_BUFFER_SEC = 2
-PROBE_DURATION    = 90      # วิ — ยาวพอสำหรับ adaptive scan
+PROBE_DURATION    = 90
 OCR_CROP_RATIO    = {"left": 0.82, "top": 0.02, "right": 1.00, "bottom": 0.12}
-SCAN_START        = 10      # เริ่ม scan ที่ 10s (ข้าม intro)
-SCAN_END          = 65      # scan ถึง 60s
-SCAN_STEP         = 5       # ขยับทีละ 5s
+SCAN_START        = 10
+SCAN_END          = 65
+SCAN_STEP         = 5
 
 # ============================================================
 # 1.  DATACLASSES
@@ -43,13 +45,13 @@ class StreamInfo:
     url:               str
     stream_type:       str
     title:             str = ""
-    release_timestamp: Optional[int] = None   # Unix timestamp (VOD only)
+    release_timestamp: Optional[int] = None
 
 @dataclass
 class CalibResult:
-    stream_start_sec: int    # วินาทีนับจากเที่ยงคืน ของเวลาเริ่มต้น stream
-    confidence:       float  # 0.0–1.0
-    method_used:      str    # "metadata" | "ocr" | "manual"
+    stream_start_sec: int
+    confidence:       float
+    method_used:      str
 
 @dataclass
 class ClipSegment:
@@ -64,6 +66,26 @@ class LiveBrief:
     cover_text:  str
     caption:     str
     segments:    list[ClipSegment] = field(default_factory=list)
+
+# ── Local (REC) dataclasses ──────────────────────────────────
+@dataclass
+class RecSegment:
+    start_tc:    str   # raw เช่น "15.43"
+    start_sec:   int
+    start_label: str
+    end_tc:      str
+    end_sec:     int
+    end_label:   str
+    tc_format:   str   # "MM.SS" | "HH.MM.SS"
+
+@dataclass
+class RecBrief:
+    raw_source:  str            # raw string จาก doc (URL หรือชื่อไฟล์)
+    file_id:     Optional[str]  # Drive file ID (ถ้าเป็น URL)
+    filename:    Optional[str]  # ชื่อไฟล์ (ถ้าไม่ใช่ URL)
+    cover_text:  str
+    caption:     str
+    segments:    list[RecSegment] = field(default_factory=list)
 
 class NoClock(Exception):
     pass
@@ -108,7 +130,6 @@ def _ffp() -> str:
     raise RuntimeError("ไม่พบ ffprobe — ติดตั้ง ffmpeg (รวม ffprobe)")
 
 def _get_ffmpeg_exe() -> Optional[str]:
-    """หา ffmpeg exe สำหรับส่งให้ yt-dlp (ไม่ raise)"""
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir  = os.path.dirname(current_dir)
     for candidate in [
@@ -154,24 +175,17 @@ def get_duration(path: str) -> float:
         return 0.0
 
 # ============================================================
-# 3.  MODULE 1 — TEXT PARSER
+# 3.  MODULE 1 — YOUTUBE BRIEF PARSER
 # ============================================================
 def clock_to_sec(s: str) -> int:
-    """HH.MM.SS (brief format) → วินาที"""
     p = s.split(".")
     return int(p[0])*3600 + int(p[1])*60 + int(p[2])
 
 def hhmm_to_sec(s: str) -> int:
-    """HH:MM:SS (OCR / manual format) → วินาที"""
     p = s.split(":")
     return int(p[0])*3600 + int(p[1])*60 + int(p[2])
 
 def clock_to_sec_safe(clock_str: str, stream_start_sec: int) -> int:
-    """
-    แปลง TC string (HH.MM.SS) → วินาที
-    รองรับ midnight wrap-around: ถ้า clock_sec น้อยกว่า stream_start เกิน 1 ชั่วโมง
-    แสดงว่าข้ามเที่ยงคืน → +86400
-    """
     sec = clock_to_sec(clock_str)
     start_of_day = stream_start_sec % 86400
     if sec < start_of_day - 3600:
@@ -183,7 +197,6 @@ def parse_brief(text: str) -> Optional[LiveBrief]:
         r'https?://(?:www\.)?(?:youtube\.com/(?:live/|watch\?v=)|youtu\.be/)[\w\-?=&]+', text)
     if not url_m:
         return None
-
     cover_m = re.search(
         r'ปก\s*:\s*(.+?)(?=\n[ \t]*(?:แคปชั่น|TC|ลิงค์)|\n[ \t]*\n|\Z)',
         text, re.DOTALL)
@@ -230,14 +243,9 @@ def compute_timestamps(segments: list[ClipSegment], calib: CalibResult) -> list[
 # 4.  MODULE 2 — STREAM INTELLIGENCE
 # ============================================================
 def get_stream_info(url: str, log=None) -> StreamInfo:
-    """ดึง metadata จาก yt-dlp เพื่อวิเคราะห์ประเภท stream"""
     def _info(msg):
         if log: log(msg)
-
-    opts = {
-        'quiet': True, 'no_warnings': True, 'noplaylist': True,
-        'skip_download': True,
-    }
+    opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True, 'skip_download': True}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -268,9 +276,7 @@ def get_stream_info(url: str, log=None) -> StreamInfo:
         _info("  ✅ Stream type: VOD")
 
     return StreamInfo(
-        url=url,
-        stream_type=stype,
-        title=title,
+        url=url, stream_type=stype, title=title,
         release_timestamp=int(rel_ts) if rel_ts else None,
     )
 
@@ -336,7 +342,6 @@ def _ocr_gemini(img_path: str, api_key: str) -> Optional[str]:
 
 def _try_ocr_at(probe_clip: str, t: float, tmp_dir: str,
                 api_key: str, prefix: str = "scan") -> Optional[str]:
-    """OCR ที่ตำแหน่ง t วินาที — คืน 'HH:MM:SS' หรือ None"""
     frame = os.path.join(tmp_dir, f"{prefix}_{int(t)}s.jpg")
     crop  = os.path.join(tmp_dir, f"{prefix}_{int(t)}s_crop.png")
     if not _extract_frame(probe_clip, t, frame):
@@ -350,20 +355,13 @@ def _try_ocr_at(probe_clip: str, t: float, tmp_dir: str,
 # ============================================================
 def _find_clock_appearance(probe_clip: str, tmp_dir: str,
                             api_key: str, log=None) -> tuple[float, str]:
-    """
-    Adaptive scan: ลอง OCR ทีละ SCAN_STEP วินาที ตั้งแต่ SCAN_START
-    คืน (T_found, clock_str) แรกที่ OCR สำเร็จ
-    ถ้าไม่เจอเลยใน 10–60s → raise NoClock
-    """
     def _info(msg):
         if log: log(msg)
-
     dur = get_duration(probe_clip)
     _info(f"  📏 Probe clip = {dur:.1f}s  |  Adaptive scan {SCAN_START}–{min(SCAN_END-1, int(dur))}s")
-
     for t in range(SCAN_START, SCAN_END, SCAN_STEP):
         if t >= dur - 1:
-            _info(f"  ⚠️  T={t}s เกิน duration ของ probe clip ({dur:.0f}s)")
+            _info(f"  ⚠️  T={t}s เกิน duration ({dur:.0f}s)")
             break
         clock = _try_ocr_at(probe_clip, float(t), tmp_dir, api_key, "scan")
         if clock:
@@ -371,7 +369,6 @@ def _find_clock_appearance(probe_clip: str, tmp_dir: str,
             return (float(t), clock)
         else:
             _info(f"  ⬜ T={t}s — ไม่พบนาฬิกา")
-
     raise NoClock(
         f"ไม่พบนาฬิกาในช่วง {SCAN_START}–{min(SCAN_END-1, int(dur))}s\n"
         "กรุณากรอก Manual Calibration ด้านซ้าย"
@@ -379,22 +376,14 @@ def _find_clock_appearance(probe_clip: str, tmp_dir: str,
 
 def _ocr_calibrate(probe_clip: str, t_found: float, clock_found: str,
                    tmp_dir: str, api_key: str, log=None) -> CalibResult:
-    """
-    Calibrate 3 จุด: t_found, t_found+15s, t_found+30s
-    stream_start = median(clock_at_T - T)
-    """
     def _info(msg):
         if log: log(msg)
-
     dur = get_duration(probe_clip)
-
-    # จุดแรกมีแล้วจาก find_clock_appearance
     wall_sec_0 = hhmm_to_sec(clock_found)
     est_0 = wall_sec_0 - int(t_found)
     estimates = [est_0]
     _info(f"  📐 T={t_found:.0f}s → {clock_found} → start estimate = "
           f"{est_0//3600:02d}:{(est_0%3600)//60:02d}:{est_0%60:02d}")
-
     for t in [t_found + 15, t_found + 30]:
         if t >= dur - 1:
             continue
@@ -407,34 +396,20 @@ def _ocr_calibrate(probe_clip: str, t_found: float, clock_found: str,
                   f"{est//3600:02d}:{(est%3600)//60:02d}:{est%60:02d}")
         else:
             _info(f"  ⚠️  T={t:.0f}s — OCR ล้มเหลว — ข้าม")
-
     vals = sorted(estimates)
-    stream_start = vals[len(vals) // 2]  # median
+    stream_start = vals[len(vals) // 2]
     spread = max(vals) - min(vals) if len(vals) > 1 else 0
     confidence = max(0.0, min(1.0, 1.0 - spread / 10.0))
-
     h, m, s = stream_start // 3600, (stream_start % 3600) // 60, stream_start % 60
     _info(f"  ✅ stream_start = {h:02d}:{m:02d}:{s:02d}  "
           f"(spread={spread}s, confidence={confidence:.0%})")
-
-    return CalibResult(
-        stream_start_sec=stream_start,
-        confidence=confidence,
-        method_used="ocr",
-    )
+    return CalibResult(stream_start_sec=stream_start, confidence=confidence, method_used="ocr")
 
 def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
               manual_ref: Optional[dict] = None, log=None) -> CalibResult:
-    """
-    Priority:
-    1. manual_ref (ผู้ใช้กรอกเอง) → confidence 1.0
-    2. Metadata release_timestamp → confidence 0.95
-    3. OCR adaptive scan → confidence จาก spread
-    """
     def _info(msg):
         if log: log(msg)
 
-    # ── Priority 1: Manual ─────────────────────────────────────
     if manual_ref:
         try:
             clock_sec    = hhmm_to_sec(manual_ref["clock"])
@@ -446,28 +421,24 @@ def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
         except Exception as e:
             _info(f"  ⚠️  Manual ref error: {e} — ข้ามไป OCR")
 
-    # ── Priority 2: Metadata ───────────────────────────────────
     if stream_info.release_timestamp:
         dt = datetime.datetime.fromtimestamp(stream_info.release_timestamp)
         stream_start = dt.hour * 3600 + dt.minute * 60 + dt.second
-        _info(f"  📋 Metadata → stream_start = {dt.strftime('%H:%M:%S')}  (release_timestamp)")
+        _info(f"  📋 Metadata → stream_start = {dt.strftime('%H:%M:%S')}")
         return CalibResult(stream_start_sec=stream_start, confidence=0.95, method_used="metadata")
 
-    # ── Priority 3: OCR probe ──────────────────────────────────
     _info("  🔍 โหลด Probe Clip (90 วิ / 360p)...")
     probe = _download_probe_clip(stream_info.url, tmp_dir)
     if not probe:
         raise NoClock("โหลด Probe Clip ล้มเหลว")
-
     _info("  🔍 Adaptive Clock Scan...")
     t_found, clock_found = _find_clock_appearance(probe, tmp_dir, api_key, log)
     return _ocr_calibrate(probe, t_found, clock_found, tmp_dir, api_key, log)
 
 # ============================================================
-# 7.  MODULE 5 — DOWNLOADER
+# 7.  MODULE 5 — YOUTUBE DOWNLOADER
 # ============================================================
 def _download_probe_clip(url: str, out_dir: str) -> Optional[str]:
-    """โหลด probe clip 90 วิ (360p) สำหรับ adaptive clock scan"""
     ffmpeg_exe = _get_ffmpeg_exe()
     out = os.path.join(out_dir, "probe_clip.mp4")
     opts = {
@@ -488,7 +459,6 @@ def _download_probe_clip(url: str, out_dir: str) -> Optional[str]:
                 return str(f)
             os.remove(str(f))
             break
-        # fallback format
         opts['format'] = 'best[height<=480]/best'
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
@@ -526,7 +496,7 @@ def download_segment(url: str, vs: float, ve: float, out: str) -> bool:
         return False
 
 # ============================================================
-# 8.  MODULE 6 — FFMPEG CONCAT
+# 8.  MODULE 6 — FFMPEG CONCAT (shared)
 # ============================================================
 def concat_segments(seg_paths: list[str], output: str, tmp_dir: str) -> bool:
     valid = [p for p in seg_paths
@@ -550,7 +520,6 @@ def concat_segments(seg_paths: list[str], output: str, tmp_dir: str) -> bool:
     if r.returncode == 0 and os.path.exists(temp_o) and os.path.getsize(temp_o) > 10*1024:
         os.rename(temp_o, output)
         return True
-
     if os.path.exists(temp_o):
         os.remove(temp_o)
     n = len(valid)
@@ -567,14 +536,13 @@ def concat_segments(seg_paths: list[str], output: str, tmp_dir: str) -> bool:
     return r2.returncode == 0 and os.path.exists(output) and os.path.getsize(output) > 10*1024
 
 # ============================================================
-# 9.  PIPELINE ORCHESTRATOR
+# 9.  MODULE 7 — YOUTUBE PIPELINE
 # ============================================================
 def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
                  gemini_key: str, manual_ref: Optional[dict], log) -> dict:
     res = {"mp4": None, "calib": None, "error": None, "need_manual": False}
     os.makedirs(out_dir, exist_ok=True)
 
-    # ── Step 1: Stream Intelligence ────────────────────────────
     log("📡 วิเคราะห์ stream...")
     try:
         stream_info = get_stream_info(brief.youtube_url, log)
@@ -582,7 +550,6 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
         res["error"] = f"วิเคราะห์ stream ล้มเหลว: {e}"
         return res
 
-    # ── Step 2: Calibration ────────────────────────────────────
     log("🔍 Calibrate Timecode...")
     try:
         calib = calibrate(stream_info, tmp_dir, gemini_key, manual_ref, log)
@@ -597,16 +564,13 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
         res["need_manual"] = True
         return res
 
-    # ── Step 3: Compute timestamps ─────────────────────────────
     timestamps = compute_timestamps(brief.segments, calib)
     if not timestamps:
         res["error"] = "ไม่มี segment — ตรวจ TC format: HH.MM.SS label - HH.MM.SS"
         return res
     for i, ts in enumerate(timestamps, 1):
-        log(f"  📐 SEG {i}: [{ts['video_start']:.0f}s → {ts['video_end']:.0f}s] "
-            f"({ts['duration']:.0f}s)")
+        log(f"  📐 SEG {i}: [{ts['video_start']:.0f}s → {ts['video_end']:.0f}s]")
 
-    # ── Step 4: Download segments ──────────────────────────────
     seg_paths = []
     for i, ts in enumerate(timestamps, 1):
         log(f"⬇️  Segment {i}/{len(timestamps)}: {ts['start_clock']} → {ts['end_clock']}")
@@ -620,7 +584,6 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
         res["error"] = "ไม่สามารถโหลด segment ได้เลย"
         return res
 
-    # ── Step 5: Concat ─────────────────────────────────────────
     log("⚡ FFmpeg Concat...")
     safe_cover = re.sub(r'[\\/*?:"<>|\'\n\r]', '', brief.cover_text)[:40].strip()
     ts_stamp   = time.strftime("%Y%m%d_%H%M")
@@ -628,7 +591,6 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
     if not concat_segments(seg_paths, out_mp4, tmp_dir):
         res["error"] = "FFmpeg Concat ล้มเหลว"
         return res
-
     res["mp4"] = out_mp4
     info = probe_video(out_mp4)
     log(f"✅ {os.path.basename(out_mp4)}  "
@@ -636,7 +598,246 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
     return res
 
 # ============================================================
-# 10.  STREAMLIT UI
+# 10. MODULE 8 — DOC READER + LOCAL BRIEF PARSER
+# ============================================================
+def _read_doc_text(doc_id: str) -> str:
+    """อ่าน Google Doc แล้วคืน plain text"""
+    service = get_docs_service()
+    doc = service.documents().get(documentId=doc_id).execute()
+    text = ""
+    for element in doc.get("body", {}).get("content", []):
+        for para_elem in element.get("paragraph", {}).get("elements", []):
+            text += para_elem.get("textRun", {}).get("content", "")
+    return text
+
+def _tc_to_sec_local(tc_str: str) -> int:
+    """
+    Auto-detect: MM.SS (1 dot) หรือ HH.MM.SS (2 dots)
+    ตัวอย่าง: "15.43" → 943s, "01.15.43" → 4543s
+    """
+    parts = tc_str.strip().split(".")
+    if len(parts) == 2:
+        return int(parts[0]) * 60 + int(parts[1])
+    elif len(parts) == 3:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    return 0
+
+def _tc_format(tc_str: str) -> str:
+    return "HH.MM.SS" if tc_str.count(".") == 2 else "MM.SS"
+
+def _sec_to_display(sec: int) -> str:
+    h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
+    return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+def parse_doc_brief(text: str) -> Optional[RecBrief]:
+    """
+    Parse Google Doc script text → RecBrief
+
+    รองรับ format:
+      ปก : 'title'
+      Caption / แคปชั่น : ...
+      ลิงก์คลิปต้นทาง → บรรทัดถัดไป = Drive URL หรือชื่อไฟล์
+      Tc / TC : → บรรทัดถัดไปเป็น TC segments
+    """
+    # ── cover ──────────────────────────────────────────────
+    cover_m = re.search(
+        r'ปก\s*:\s*(.+?)(?=\n[ \t]*(?:Caption|แคปชั่น|Tc|TC|ลิงก์)|\n[ \t]*\n|\Z)',
+        text, re.DOTALL | re.IGNORECASE)
+    cover_text = ""
+    if cover_m:
+        cover_text = "\n".join(
+            l.strip() for l in cover_m.group(1).strip().splitlines() if l.strip())
+
+    # ── caption ────────────────────────────────────────────
+    caption_m = re.search(
+        r'(?:Caption|แคปชั่น)\s*:\s*(.+?)(?=\n\s*\n|\nTc|\nTC|\nลิงก์|$)',
+        text, re.DOTALL | re.IGNORECASE)
+    caption = caption_m.group(1).strip() if caption_m else ""
+
+    # ── video source (Drive link หรือชื่อไฟล์) ────────────
+    raw_source, file_id, filename = "", None, None
+    src_m = re.search(r'ลิงก์คลิปต้นทาง[^\n]*\n+([^\n]+)', text)
+    if src_m:
+        raw_source = src_m.group(1).strip()
+        if 'drive.google.com' in raw_source or 'docs.google.com' in raw_source:
+            file_id = extract_id(raw_source)
+        else:
+            # plain filename เช่น "REC_0505.mp4"
+            filename = raw_source
+
+    if not raw_source:
+        return None
+
+    # ── TC segments ────────────────────────────────────────
+    # Pattern: optional_prefix TC_start (label) - TC_end (label)
+    # TC = (\d{1,2}\.\d{2}) หรือ (\d{1,2}\.\d{2}\.\d{2})
+    TC_PAT = re.compile(
+        r'(\d{1,2}\.\d{2}(?:\.\d{2})?)'    # group 1: start TC
+        r'\s*(?:\(([^)]*)\))?'              # group 2: start label (optional)
+        r'\s*-\s*'
+        r'(\d{1,2}\.\d{2}(?:\.\d{2})?)'    # group 3: end TC
+        r'\s*(?:\(([^)]*)\))?'              # group 4: end label (optional)
+    )
+    segments = []
+    for line in text.splitlines():
+        m = TC_PAT.search(line)
+        if m:
+            s_tc, s_lbl, e_tc, e_lbl = m.group(1), m.group(2), m.group(3), m.group(4)
+            s_sec = _tc_to_sec_local(s_tc)
+            e_sec = _tc_to_sec_local(e_tc)
+            segments.append(RecSegment(
+                start_tc=s_tc, start_sec=s_sec,
+                start_label=(s_lbl or "clip").strip(),
+                end_tc=e_tc,   end_sec=e_sec,
+                end_label=(e_lbl or "").strip(),
+                tc_format=_tc_format(s_tc),
+            ))
+
+    return RecBrief(
+        raw_source=raw_source,
+        file_id=file_id,
+        filename=filename,
+        cover_text=cover_text,
+        caption=caption,
+        segments=segments,
+    )
+
+# ============================================================
+# 11. MODULE 9 — DRIVE DOWNLOADER + LOCAL PIPELINE
+# ============================================================
+def _search_drive_by_name(filename: str, log=None) -> Optional[str]:
+    """ค้นหาไฟล์ใน Drive ด้วยชื่อ — คืน file ID แรกที่เจอ"""
+    def _info(msg):
+        if log: log(msg)
+    try:
+        service = get_drive_service()
+        safe_name = filename.replace("'", "\\'")
+        results = service.files().list(
+            q=f"name='{safe_name}' and trashed=false",
+            fields="files(id, name, size, mimeType)",
+            pageSize=5,
+            orderBy="modifiedTime desc",
+        ).execute()
+        files = results.get("files", [])
+        if files:
+            f = files[0]
+            size_mb = int(f.get("size", 0)) / (1024*1024)
+            _info(f"  🔎 พบไฟล์: {f['name']}  ({size_mb:.1f} MB)")
+            return f["id"]
+        _info(f"  ❌ ไม่พบไฟล์ '{filename}' ใน Drive")
+        return None
+    except Exception as e:
+        _info(f"  ❌ Drive search error: {e}")
+        return None
+
+def _get_drive_file_info(file_id: str) -> dict:
+    """ดึง metadata ของไฟล์จาก Drive"""
+    try:
+        service = get_drive_service()
+        f = service.files().get(
+            fileId=file_id, fields="id,name,size,mimeType").execute()
+        return f
+    except:
+        return {}
+
+def _download_drive_file(file_id: str, out_path: str, log=None) -> bool:
+    """Download ไฟล์จาก Drive แบบ chunked พร้อม progress log"""
+    def _info(msg):
+        if log: log(msg)
+    try:
+        service  = get_drive_service()
+        request  = service.files().get_media(fileId=file_id)
+        last_pct = -1
+        with open(out_path, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request, chunksize=20*1024*1024)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                if status:
+                    pct = int(status.progress() * 100)
+                    if pct >= last_pct + 10:
+                        _info(f"  ⬇️  Download {pct}%")
+                        last_pct = pct
+        ok = os.path.exists(out_path) and os.path.getsize(out_path) > 1024
+        if ok:
+            size_mb = os.path.getsize(out_path) / (1024*1024)
+            _info(f"  ✅ Download เสร็จ — {size_mb:.1f} MB")
+        return ok
+    except Exception as e:
+        _info(f"  ❌ Download error: {e}")
+        return False
+
+def _ffmpeg_cut(src: str, start_sec: int, end_sec: int, out: str) -> bool:
+    """ตัดวิดีโอโดยตรงด้วย FFmpeg — ไม่ต้อง re-encode"""
+    r = subprocess.run(
+        [_ff(), "-y",
+         "-ss", str(start_sec),
+         "-to", str(end_sec),
+         "-i", src,
+         "-c", "copy",
+         "-avoid_negative_ts", "1",
+         out],
+        capture_output=True)
+    return r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 10*1024
+
+def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str, log) -> dict:
+    res = {"mp4": None, "error": None}
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ── Step 1: Resolve video file ─────────────────────────────
+    log("🔎 ค้นหาไฟล์วิดีโอใน Google Drive...")
+    file_id = brief.file_id
+    if not file_id and brief.filename:
+        file_id = _search_drive_by_name(brief.filename, log)
+    if not file_id:
+        res["error"] = (
+            f"ไม่พบไฟล์ '{brief.raw_source}' ใน Drive\n"
+            "ตรวจสอบว่าไฟล์มีอยู่และ account มีสิทธิ์เข้าถึง"
+        )
+        return res
+
+    # ── Step 2: Download ───────────────────────────────────────
+    info = _get_drive_file_info(file_id)
+    ext  = Path(info.get("name", "video.mp4")).suffix or ".mp4"
+    src_path = os.path.join(tmp_dir, f"source{ext}")
+    log(f"⬇️  กำลัง download: {info.get('name', file_id)}")
+    if not _download_drive_file(file_id, src_path, log):
+        res["error"] = "Download ไฟล์จาก Drive ล้มเหลว"
+        return res
+
+    # ── Step 3: FFmpeg cut ─────────────────────────────────────
+    seg_paths = []
+    for i, seg in enumerate(brief.segments, 1):
+        log(f"✂️  SEG {i}/{len(brief.segments)}: "
+            f"{seg.start_tc} → {seg.end_tc}  "
+            f"({_sec_to_display(seg.start_sec)} → {_sec_to_display(seg.end_sec)})")
+        seg_out = os.path.join(tmp_dir, f"seg_{i:02d}.mp4")
+        if _ffmpeg_cut(src_path, seg.start_sec, seg.end_sec, seg_out):
+            dur = seg.end_sec - seg.start_sec
+            seg_paths.append(seg_out)
+            log(f"  ✅ seg_{i:02d}.mp4 ({dur}s)")
+        else:
+            log(f"  ⚠️  SEG {i} ล้มเหลว — ข้าม")
+    if not seg_paths:
+        res["error"] = "ไม่สามารถตัดได้สักคลิป — ตรวจสอบ TC และไฟล์วิดีโอ"
+        return res
+
+    # ── Step 4: Concat ─────────────────────────────────────────
+    log("⚡ FFmpeg Concat...")
+    safe_cover = re.sub(r'[\\/*?:"<>|\'\n\r]', '', brief.cover_text)[:40].strip()
+    ts_stamp   = time.strftime("%Y%m%d_%H%M")
+    out_mp4    = os.path.join(out_dir, f"PyLIVE_{safe_cover}_{ts_stamp}.mp4")
+    if not concat_segments(seg_paths, out_mp4, tmp_dir):
+        res["error"] = "FFmpeg Concat ล้มเหลว"
+        return res
+    res["mp4"] = out_mp4
+    vi = probe_video(out_mp4)
+    log(f"✅ {os.path.basename(out_mp4)}  "
+        f"{vi.get('duration', 0):.1f}s  {vi.get('size_mb', 0):.1f}MB")
+    return res
+
+# ============================================================
+# 12. STREAMLIT UI
 # ============================================================
 st.set_page_config(page_title="PyL.I.V.E.", page_icon="🎬", layout="wide")
 inject_global_css()
@@ -646,7 +847,7 @@ st.markdown("""<style>
   --border:rgba(255,255,255,0.08);
   --text-1:#e8eaf0;--text-2:#8b90a0;--text-3:#555a6a;
   --blue:#4a9eff;--teal:#2dd4a8;--orange:#ff7a2f;--red:#ff4d4d;--yellow:#ffd166;}
-textarea{font-family:'IBM Plex Mono',monospace!important;font-size:13px!important;
+textarea,input[type=text]{font-family:'IBM Plex Mono',monospace!important;font-size:13px!important;
   background:#1a1e26!important;color:#e8eaf0!important;
   border:1px solid rgba(255,255,255,.1)!important;border-radius:8px!important;}
 .pc{background:#13161b;border:1px solid rgba(255,255,255,.08);
@@ -673,6 +874,8 @@ textarea{font-family:'IBM Plex Mono',monospace!important;font-size:13px!importan
   border-radius:8px;padding:10px 14px;margin-bottom:10px;}
 .manual-warn{background:#1a1e26;border:1px solid rgba(255,122,47,.3);
   border-left:3px solid #ff7a2f;border-radius:10px;padding:14px 18px;margin-bottom:12px;}
+.src-card{background:#13161b;border:1px solid rgba(255,255,255,.08);
+  border-left:3px solid #ff7a2f;border-radius:10px;padding:12px 16px;margin-bottom:8px;}
 .ff-ok{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#2dd4a8;
   padding:5px 10px;background:rgba(45,212,168,.08);border-radius:6px;
   border:1px solid rgba(45,212,168,.2);margin-bottom:4px;}
@@ -683,24 +886,32 @@ textarea{font-family:'IBM Plex Mono',monospace!important;font-size:13px!importan
 </style>""", unsafe_allow_html=True)
 
 # ── session state ─────────────────────────────────────────────
-_DEF = {
+_YT_DEF = {
     "live_running":  False,
     "live_done":     False,
     "live_mp4":      None,
     "live_log":      [],
-    "live_out_dir":  "",
     "live_calib":    None,
     "need_manual":   False,
-    "_cfg_cache":    {},
 }
-for k, v in _DEF.items():
+_REC_DEF = {
+    "rec_running":   False,
+    "rec_done":      False,
+    "rec_mp4":       None,
+    "rec_log":       [],
+    "rec_brief":     None,   # RecBrief parsed จาก doc
+    "rec_doc_url":   "",
+}
+_SHARED = {"live_out_dir": "", "_cfg_cache": {}}
+
+for k, v in {**_YT_DEF, **_REC_DEF, **_SHARED}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 _cfg = load_config()
 st.session_state["_cfg_cache"] = _cfg
 
-# ── progress renderer ──────────────────────────────────────────
+# ── shared helpers ────────────────────────────────────────────
 def _prog(c, msg, icon="⚙️", pct=0.0, done=False):
     if done:
         c.markdown(
@@ -729,7 +940,7 @@ def _prog(c, msg, icon="⚙️", pct=0.0, done=False):
             f'<style>@keyframes spin{{to{{transform:rotate(360deg)}}}}</style>',
             unsafe_allow_html=True)
 
-# ── header ─────────────────────────────────────────────────────
+# ── header ────────────────────────────────────────────────────
 st.markdown("""
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
   <div style="font-size:32px;">🎬</div>
@@ -737,12 +948,12 @@ st.markdown("""
     <div style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:700;
       color:#e8eaf0;line-height:1.1;">PyL.I.V.E.</div>
     <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#555a6a;
-      margin-top:2px;letter-spacing:.06em;">LIVE INTELLIGENCE VIDEO EXTRACTOR — V4.0</div>
+      margin-top:2px;letter-spacing:.06em;">LIVE INTELLIGENCE VIDEO EXTRACTOR — V4.1</div>
   </div>
   <div style="margin-left:auto;">
     <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;padding:3px 8px;
       background:#1a1e26;border-radius:4px;color:#ff7a2f;
-      border:1px solid rgba(255,122,47,.25);">V4.0</span>
+      border:1px solid rgba(255,122,47,.25);">V4.1</span>
   </div>
 </div>
 <div style="height:1px;background:rgba(255,255,255,.08);margin:16px 0 22px 0;"></div>
@@ -766,8 +977,7 @@ with st.sidebar:
     else:
         st.markdown(
             '<div class="ff-err">❌ ไม่พบ ffmpeg<br>'
-            '• macOS: <code>brew install ffmpeg</code><br>'
-            '• หรือระบุ path ใน config → <code>ffmpeg_path</code></div>',
+            '• macOS: <code>brew install ffmpeg</code></div>',
             unsafe_allow_html=True)
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
@@ -791,236 +1001,380 @@ with st.sidebar:
                     st.rerun()
 
 # ════════════════════════════════════════════════════════════
-# MAIN COLUMNS
+# TABS
 # ════════════════════════════════════════════════════════════
-col_l, col_r = st.columns([1, 1], gap="large")
+tab_yt, tab_rec = st.tabs(["📡  YouTube Live", "📁  Local (REC)"])
 
-# ────────────────  LEFT — Input  ────────────────────────────
-with col_l:
-    st.markdown('<div class="sl-lbl">01 — วางข้อความ Brief</div>', unsafe_allow_html=True)
-    brief_text = st.text_area(
-        "Brief", label_visibility="collapsed", height=220,
-        placeholder=(
-            "//\n"
-            "ปก : ชื่อเรื่อง\n"
-            "แคปชั่น : ...\n\n"
-            "TC (เวลามุมขวาของจอ) :\n"
-            "21.08.12 วันที่ 1 ม.ค. - 21.10.24 เท่านั้นเอง\n\n"
-            "ลิงค์ถ่ายทอดสด : https://www.youtube.com/live/..."
-        ), key="brief_ta",
-    )
+# ════════════════════════════════════════════════════════════
+# TAB 1 — YOUTUBE LIVE
+# ════════════════════════════════════════════════════════════
+with tab_yt:
+    col_l, col_r = st.columns([1, 1], gap="large")
 
-    parsed: Optional[LiveBrief] = None
-    if brief_text.strip():
-        parsed = parse_brief(brief_text)
-        if parsed:
+    with col_l:
+        st.markdown('<div class="sl-lbl">01 — วางข้อความ Brief</div>', unsafe_allow_html=True)
+        brief_text = st.text_area(
+            "Brief", label_visibility="collapsed", height=220,
+            placeholder=(
+                "//\n"
+                "ปก : ชื่อเรื่อง\n"
+                "แคปชั่น : ...\n\n"
+                "TC (เวลามุมขวาของจอ) :\n"
+                "21.08.12 วันที่ 1 ม.ค. - 21.10.24 เท่านั้นเอง\n\n"
+                "ลิงค์ถ่ายทอดสด : https://www.youtube.com/live/..."
+            ), key="brief_ta",
+        )
+
+        parsed: Optional[LiveBrief] = None
+        if brief_text.strip():
+            parsed = parse_brief(brief_text)
+            if parsed:
+                st.markdown(
+                    '<div style="font-family:IBM Plex Mono,monospace;font-size:10px;'
+                    'color:#2dd4a8;text-transform:uppercase;letter-spacing:.1em;'
+                    'margin:12px 0 10px;">✅ Parse สำเร็จ</div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="pc"><div class="pl">YouTube URL</div>'
+                    f'<div class="pv" style="font-family:IBM Plex Mono,monospace;'
+                    f'font-size:12px;color:#4a9eff;">{parsed.youtube_url}</div></div>',
+                    unsafe_allow_html=True)
+                segs_html = "".join(
+                    f'<div class="sr"><span class="sn">SEG {i}</span>'
+                    f'<div><div class="sc">{s.start_clock} → {s.end_clock}</div>'
+                    f'<div class="sl">"{s.start_label}" … "{s.end_label}"</div>'
+                    f'</div></div>'
+                    for i, s in enumerate(parsed.segments, 1))
+                if segs_html:
+                    st.markdown(
+                        f'<div style="font-family:IBM Plex Mono,monospace;font-size:10px;'
+                        f'color:#555a6a;text-transform:uppercase;letter-spacing:.1em;'
+                        f'margin:12px 0 8px;">{len(parsed.segments)} SEGMENT(S)</div>' + segs_html,
+                        unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    '<div style="font-family:IBM Plex Mono,monospace;font-size:12px;'
+                    'color:#ff4d4d;margin-top:8px;">⚠️ ไม่พบลิงก์ YouTube</div>',
+                    unsafe_allow_html=True)
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        with st.expander(
+            "✋ Manual Calibration (ระบุ reference point เอง)",
+            expanded=st.session_state["need_manual"]
+        ):
+            st.markdown(
+                '<div style="font-family:IBM Plex Sans Thai,sans-serif;font-size:12px;'
+                'color:#8b90a0;margin-bottom:10px;">'
+                'ใช้เมื่อ OCR ล้มเหลว หรือนาฬิกาไม่ปรากฏในวิดีโอ</div>',
+                unsafe_allow_html=True)
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                man_clock = st.text_input(
+                    "เวลาบนหน้าจอ (HH:MM:SS)", placeholder="14:35:22", key="man_clock")
+            with mc2:
+                man_vpos = st.text_input(
+                    "ตำแหน่งในวิดีโอ (วินาที)", placeholder="125", key="man_vpos")
+            manual_ref = None
+            if man_clock and man_vpos:
+                if re.match(r'^\d{2}:\d{2}:\d{2}$', man_clock.strip()) and man_vpos.strip().isdigit():
+                    manual_ref = {"clock": man_clock.strip(), "video_pos": int(man_vpos.strip())}
+                    st.markdown(
+                        '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
+                        'color:#2dd4a8;margin-top:6px;">✅ Reference set</div>',
+                        unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
+                        'color:#ff4d4d;margin-top:6px;">⚠️ รูปแบบไม่ถูก — HH:MM:SS และตัวเลขจำนวนเต็ม</div>',
+                        unsafe_allow_html=True)
+            else:
+                manual_ref = None
+
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        yt_run_btn = st.button(
+            "🚀  เริ่มประมวลผล", type="primary",
+            disabled=(
+                (not parsed)
+                or (parsed is not None and not parsed.segments)
+                or st.session_state["live_running"]
+                or (not ff_path)
+            ),
+            use_container_width=True, key="yt_run_btn")
+
+    with col_r:
+        st.markdown('<div class="sl-lbl">02 — ผลลัพธ์</div>', unsafe_allow_html=True)
+        yt_prog_box   = st.empty()
+        yt_result_box = st.empty()
+        yt_calib_box  = st.empty()
+        yt_log_box    = st.empty()
+
+    # ── YouTube pipeline ──────────────────────────────────────
+    if yt_run_btn and parsed:
+        st.session_state.update({
+            "live_running": True, "live_done": False,
+            "live_mp4": None, "live_log": [],
+            "live_calib": None, "need_manual": False,
+        })
+        tmp_dir = tempfile.mkdtemp(prefix="pylive_yt_")
+
+        def _yt_log(msg):
+            st.session_state["live_log"].append(f"[{time.strftime('%H:%M:%S')}]  {msg}")
+
+        try:
+            _prog(yt_prog_box, "วิเคราะห์ stream + Calibrate...", "📡", pct=0.10)
+            _yt_log(f"🚀 เริ่ม Pipeline  |  {len(parsed.segments)} segment(s)")
+            res = run_pipeline(
+                brief=parsed,
+                out_dir=st.session_state["live_out_dir"],
+                tmp_dir=tmp_dir,
+                gemini_key=_cfg.get("gemini_key1", ""),
+                manual_ref=manual_ref,
+                log=_yt_log,
+            )
+            st.session_state["live_calib"]  = res.get("calib")
+            st.session_state["need_manual"] = res.get("need_manual", False)
+            if res["error"]:
+                _yt_log(f"❌ {res['error']}")
+                _prog(yt_prog_box, res["error"][:80], "❌", pct=0)
+            else:
+                st.session_state["live_mp4"] = res["mp4"]
+                _prog(yt_prog_box, "", done=True)
+                _yt_log("🎉 Pipeline เสร็จสมบูรณ์!")
+                st.session_state["live_done"] = True
+        except Exception as e:
+            _yt_log(f"❌ Error: {e}")
+            _prog(yt_prog_box, str(e)[:80], "❌", pct=0)
+        finally:
+            st.session_state["live_running"] = False
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        st.rerun()
+
+    # ── render YouTube results ─────────────────────────────────
+    if st.session_state["need_manual"] and not st.session_state["live_done"]:
+        yt_result_box.markdown(
+            '<div class="manual-warn">'
+            '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:#ff7a2f;'
+            'text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">'
+            '✋ ต้องการ Manual Calibration</div>'
+            '<div style="font-family:IBM Plex Sans Thai,sans-serif;font-size:13px;color:#e8eaf0;">'
+            'OCR ไม่สามารถอ่านนาฬิกาจากวิดีโอได้<br>'
+            'กรุณากรอก reference point ในช่อง Manual Calibration แล้วกดเริ่มอีกครั้ง</div>'
+            '</div>', unsafe_allow_html=True)
+
+    calib = st.session_state.get("live_calib")
+    if calib:
+        h = calib.stream_start_sec // 3600
+        m = (calib.stream_start_sec % 3600) // 60
+        s = calib.stream_start_sec % 60
+        conf_color = "#2dd4a8" if calib.confidence >= 0.8 else "#ffd166" if calib.confidence >= 0.5 else "#ff7a2f"
+        method_label = {"metadata": "📋 Metadata", "ocr": "👁 OCR Probe", "manual": "✋ Manual"}.get(calib.method_used, calib.method_used)
+        yt_calib_box.markdown(
+            f'<div class="calib-card"><div class="pl">Calibration Result</div>'
+            f'<div style="display:flex;align-items:center;gap:16px;margin-top:6px;">'
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:15px;color:#e8eaf0;">'
+            f'⏱ stream start = {h:02d}:{m:02d}:{s:02d}</div>'
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:{conf_color};">'
+            f'conf {calib.confidence:.0%}</div>'
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:#555a6a;">'
+            f'{method_label}</div></div></div>', unsafe_allow_html=True)
+
+    if st.session_state["live_done"]:
+        mp4 = st.session_state["live_mp4"]
+        if mp4 and os.path.exists(mp4):
+            info = probe_video(mp4)
+            yt_result_box.markdown(
+                f'<div class="oc"><div class="pl">OUTPUT FILE</div>'
+                f'<div style="font-family:IBM Plex Mono,monospace;font-size:13px;'
+                f'color:#2dd4a8;">📹 {os.path.basename(mp4)}</div>'
+                f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
+                f'color:#555a6a;margin-top:4px;">'
+                f'{info.get("duration", 0):.1f}s · {info.get("size_mb", 0):.1f}MB · '
+                f'codec={info.get("video_codec", "?")} · '
+                f'audio={"✓" if info.get("has_audio") else "✗"}</div></div>',
+                unsafe_allow_html=True)
+
+    if st.session_state["live_log"]:
+        with yt_log_box.container():
+            st.markdown('<div class="sl-lbl" style="margin-top:20px;">LOG</div>', unsafe_allow_html=True)
+            lines = st.session_state["live_log"][-60:]
+            st.markdown('<div class="lg">' + "<br>".join(lines) + '</div>', unsafe_allow_html=True)
+
+    if st.session_state["live_done"]:
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        if st.button("🔄 เริ่มใหม่", key="yt_reset_btn"):
+            for k, v in _YT_DEF.items():
+                st.session_state[k] = v
+            st.rerun()
+
+# ════════════════════════════════════════════════════════════
+# TAB 2 — LOCAL (REC)
+# ════════════════════════════════════════════════════════════
+with tab_rec:
+    col_l2, col_r2 = st.columns([1, 1], gap="large")
+
+    with col_l2:
+        st.markdown('<div class="sl-lbl">01 — Google Doc Script URL</div>', unsafe_allow_html=True)
+
+        doc_url_input = st.text_input(
+            "doc_url", label_visibility="collapsed",
+            placeholder="https://docs.google.com/document/d/...",
+            value=st.session_state["rec_doc_url"],
+            key="doc_url_input",
+        )
+        st.session_state["rec_doc_url"] = doc_url_input
+
+        load_col, _ = st.columns([2, 3])
+        with load_col:
+            load_btn = st.button(
+                "🔍  โหลด Doc", key="load_doc_btn",
+                disabled=not doc_url_input.strip() or st.session_state["rec_running"],
+                use_container_width=True)
+
+        # ── Load Doc ────────────────────────────────────────────
+        if load_btn and doc_url_input.strip():
+            with st.spinner("กำลังอ่าน Google Doc..."):
+                try:
+                    doc_id  = extract_id(doc_url_input.strip())
+                    if not doc_id:
+                        st.error("❌ ไม่สามารถ extract ID จาก URL ได้")
+                    else:
+                        doc_text = _read_doc_text(doc_id)
+                        brief    = parse_doc_brief(doc_text)
+                        if brief:
+                            st.session_state["rec_brief"] = brief
+                            st.session_state["rec_done"]  = False
+                            st.session_state["rec_mp4"]   = None
+                            st.session_state["rec_log"]   = []
+                        else:
+                            st.error("❌ Parse ไม่ได้ — ตรวจสอบว่า Doc มี 'ลิงก์คลิปต้นทาง' และ 'Tc'")
+                except Exception as e:
+                    st.error(f"❌ อ่าน Doc ล้มเหลว: {e}")
+
+        # ── Preview parsed brief ────────────────────────────────
+        rec_brief: Optional[RecBrief] = st.session_state.get("rec_brief")
+        if rec_brief:
             st.markdown(
                 '<div style="font-family:IBM Plex Mono,monospace;font-size:10px;'
                 'color:#2dd4a8;text-transform:uppercase;letter-spacing:.1em;'
-                'margin:12px 0 10px;">✅ Parse สำเร็จ</div>', unsafe_allow_html=True)
+                'margin:14px 0 10px;">✅ อ่าน Doc สำเร็จ</div>', unsafe_allow_html=True)
+
+            # source card
+            src_type = "Drive URL" if rec_brief.file_id else "ชื่อไฟล์ (จะค้นหาใน Drive)"
             st.markdown(
-                f'<div class="pc"><div class="pl">YouTube URL</div>'
-                f'<div class="pv" style="font-family:IBM Plex Mono,monospace;'
-                f'font-size:12px;color:#4a9eff;">{parsed.youtube_url}</div></div>',
-                unsafe_allow_html=True)
-            segs_html = "".join(
-                f'<div class="sr"><span class="sn">SEG {i}</span>'
-                f'<div><div class="sc">{s.start_clock} → {s.end_clock}</div>'
-                f'<div class="sl">"{s.start_label}" … "{s.end_label}"</div>'
-                f'</div></div>'
-                for i, s in enumerate(parsed.segments, 1))
-            if segs_html:
+                f'<div class="src-card">'
+                f'<div class="pl">ไฟล์วิดีโอ</div>'
+                f'<div style="font-family:IBM Plex Mono,monospace;font-size:13px;'
+                f'color:#ff7a2f;">{rec_brief.raw_source}</div>'
+                f'<div style="font-family:IBM Plex Mono,monospace;font-size:10px;'
+                f'color:#555a6a;margin-top:3px;">{src_type}</div>'
+                f'</div>', unsafe_allow_html=True)
+
+            # cover / caption
+            if rec_brief.cover_text:
+                st.markdown(
+                    f'<div class="pc"><div class="pl">ปก</div>'
+                    f'<div class="pv">{rec_brief.cover_text}</div></div>',
+                    unsafe_allow_html=True)
+
+            # segments
+            if rec_brief.segments:
+                segs_html = "".join(
+                    f'<div class="sr"><span class="sn">SEG {i}</span>'
+                    f'<div>'
+                    f'<div class="sc">{_sec_to_display(s.start_sec)} → {_sec_to_display(s.end_sec)}'
+                    f'  <span style="color:#555a6a;font-size:11px;">({s.end_sec - s.start_sec}s · {s.tc_format})</span></div>'
+                    f'<div class="sl">{s.start_tc} "{s.start_label}" — {s.end_tc} "{s.end_label}"</div>'
+                    f'</div></div>'
+                    for i, s in enumerate(rec_brief.segments, 1))
                 st.markdown(
                     f'<div style="font-family:IBM Plex Mono,monospace;font-size:10px;'
                     f'color:#555a6a;text-transform:uppercase;letter-spacing:.1em;'
-                    f'margin:12px 0 8px;">{len(parsed.segments)} SEGMENT(S)</div>' + segs_html,
-                    unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div style="font-family:IBM Plex Mono,monospace;font-size:12px;'
-                'color:#ff4d4d;margin-top:8px;">⚠️ ไม่พบลิงก์ YouTube</div>',
-                unsafe_allow_html=True)
-
-    # ── Manual Calibration ─────────────────────────────────────
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-    with st.expander(
-        "✋ Manual Calibration (ระบุ reference point เอง)",
-        expanded=st.session_state["need_manual"]
-    ):
-        st.markdown(
-            '<div style="font-family:IBM Plex Sans Thai,sans-serif;font-size:12px;'
-            'color:#8b90a0;margin-bottom:10px;">'
-            'ใช้เมื่อ OCR ล้มเหลว หรือนาฬิกาไม่ปรากฏในวิดีโอ<br>'
-            'กรอกเวลา 1 จุดที่รู้แน่ชัด เพื่อให้ระบบคำนวณ offset</div>',
-            unsafe_allow_html=True)
-        mc1, mc2 = st.columns(2)
-        with mc1:
-            man_clock = st.text_input(
-                "เวลาบนหน้าจอ (HH:MM:SS)", placeholder="14:35:22", key="man_clock")
-        with mc2:
-            man_vpos = st.text_input(
-                "ตำแหน่งในวิดีโอ (วินาที)", placeholder="125", key="man_vpos")
-
-        manual_ref = None
-        if man_clock and man_vpos:
-            if re.match(r'^\d{2}:\d{2}:\d{2}$', man_clock.strip()) and man_vpos.strip().isdigit():
-                manual_ref = {"clock": man_clock.strip(), "video_pos": int(man_vpos.strip())}
-                st.markdown(
-                    '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
-                    'color:#2dd4a8;margin-top:6px;">✅ Reference set — จะใช้ค่านี้แทน OCR</div>',
+                    f'margin:12px 0 8px;">{len(rec_brief.segments)} SEGMENT(S)</div>' + segs_html,
                     unsafe_allow_html=True)
             else:
                 st.markdown(
-                    '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
-                    'color:#ff4d4d;margin-top:6px;">'
-                    '⚠️ รูปแบบไม่ถูก — ต้องเป็น HH:MM:SS และตัวเลขจำนวนเต็ม</div>',
+                    '<div style="font-family:IBM Plex Mono,monospace;font-size:12px;'
+                    'color:#ff7a2f;margin-top:8px;">⚠️ ไม่พบ TC segments — ตรวจสอบ format ใน Doc</div>',
                     unsafe_allow_html=True)
-        else:
-            manual_ref = None
 
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-    run_btn = st.button(
-        "🚀  เริ่มประมวลผล", type="primary",
-        disabled=(
-            (not parsed)
-            or (parsed is not None and not parsed.segments)
-            or st.session_state["live_running"]
-            or (not ff_path)
-        ),
-        use_container_width=True, key="run_btn")
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        rec_run_btn = st.button(
+            "🚀  ดาวน์โหลด + ตัด", type="primary",
+            disabled=(
+                (not rec_brief)
+                or (rec_brief is not None and not rec_brief.segments)
+                or st.session_state["rec_running"]
+                or (not ff_path)
+            ),
+            use_container_width=True, key="rec_run_btn")
 
-# ────────────────  RIGHT — Results  ─────────────────────────
-with col_r:
-    st.markdown('<div class="sl-lbl">02 — ผลลัพธ์</div>', unsafe_allow_html=True)
-    prog_box   = st.empty()
-    result_box = st.empty()
-    calib_box  = st.empty()
-    log_box    = st.empty()
+    with col_r2:
+        st.markdown('<div class="sl-lbl">02 — ผลลัพธ์</div>', unsafe_allow_html=True)
+        rec_prog_box   = st.empty()
+        rec_result_box = st.empty()
+        rec_log_box    = st.empty()
 
-# ════════════════════════════════════════════════════════════
-# PIPELINE
-# ════════════════════════════════════════════════════════════
-if run_btn and parsed:
-    st.session_state.update({
-        "live_running": True, "live_done": False,
-        "live_mp4": None, "live_log": [],
-        "live_calib": None, "need_manual": False,
-    })
-    tmp_dir = tempfile.mkdtemp(prefix="pylive_")
+    # ── Local pipeline ────────────────────────────────────────
+    if rec_run_btn and rec_brief:
+        st.session_state.update({
+            "rec_running": True, "rec_done": False,
+            "rec_mp4": None, "rec_log": [],
+        })
+        tmp_dir2 = tempfile.mkdtemp(prefix="pylive_rec_")
 
-    def _log(msg):
-        st.session_state["live_log"].append(f"[{time.strftime('%H:%M:%S')}]  {msg}")
+        def _rec_log(msg):
+            st.session_state["rec_log"].append(f"[{time.strftime('%H:%M:%S')}]  {msg}")
 
-    try:
-        _prog(prog_box, "วิเคราะห์ stream + Calibrate...", "📡", pct=0.10)
-        _log(f"🚀 เริ่ม Pipeline  |  {len(parsed.segments)} segment(s)")
-
-        res = run_pipeline(
-            brief=parsed,
-            out_dir=st.session_state["live_out_dir"],
-            tmp_dir=tmp_dir,
-            gemini_key=_cfg.get("gemini_key1", ""),
-            manual_ref=manual_ref,
-            log=_log,
-        )
-
-        st.session_state["live_calib"]  = res.get("calib")
-        st.session_state["need_manual"] = res.get("need_manual", False)
-
-        if res["error"]:
-            _log(f"❌ {res['error']}")
-            _prog(prog_box, res["error"][:80], "❌", pct=0)
-        else:
-            st.session_state["live_mp4"] = res["mp4"]
-            _prog(prog_box, "", done=True)
-            _log("🎉 Pipeline เสร็จสมบูรณ์!")
-            st.session_state["live_done"] = True
-
-    except Exception as e:
-        _log(f"❌ Error: {e}")
-        _prog(prog_box, str(e)[:80], "❌", pct=0)
-    finally:
-        st.session_state["live_running"] = False
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    st.rerun()
-
-# ════════════════════════════════════════════════════════════
-# RENDER RESULTS
-# ════════════════════════════════════════════════════════════
-
-# Manual calibration warning
-if st.session_state["need_manual"] and not st.session_state["live_done"]:
-    result_box.markdown(
-        '<div class="manual-warn">'
-        '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:#ff7a2f;'
-        'text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">'
-        '✋ ต้องการ Manual Calibration</div>'
-        '<div style="font-family:IBM Plex Sans Thai,sans-serif;font-size:13px;color:#e8eaf0;">'
-        'OCR ไม่สามารถอ่านนาฬิกาจากวิดีโอได้<br>'
-        'กรุณากรอก reference point ในช่อง Manual Calibration ด้านซ้าย '
-        'แล้วกด เริ่มประมวลผล อีกครั้ง</div>'
-        '</div>', unsafe_allow_html=True)
-
-# Calibration result card
-calib = st.session_state.get("live_calib")
-if calib:
-    h = calib.stream_start_sec // 3600
-    m = (calib.stream_start_sec % 3600) // 60
-    s = calib.stream_start_sec % 60
-    conf_color = (
-        "#2dd4a8" if calib.confidence >= 0.8 else
-        "#ffd166" if calib.confidence >= 0.5 else
-        "#ff7a2f"
-    )
-    method_label = {
-        "metadata": "📋 Metadata",
-        "ocr":      "👁 OCR Probe",
-        "manual":   "✋ Manual",
-    }.get(calib.method_used, calib.method_used)
-    calib_box.markdown(
-        f'<div class="calib-card">'
-        f'<div class="pl">Calibration Result</div>'
-        f'<div style="display:flex;align-items:center;gap:16px;margin-top:6px;">'
-        f'<div style="font-family:IBM Plex Mono,monospace;font-size:15px;color:#e8eaf0;">'
-        f'⏱ stream start = {h:02d}:{m:02d}:{s:02d}</div>'
-        f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:{conf_color};">'
-        f'conf {calib.confidence:.0%}</div>'
-        f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:#555a6a;">'
-        f'{method_label}</div>'
-        f'</div></div>',
-        unsafe_allow_html=True)
-
-# Output file card
-if st.session_state["live_done"]:
-    mp4 = st.session_state["live_mp4"]
-    if mp4 and os.path.exists(mp4):
-        info = probe_video(mp4)
-        result_box.markdown(
-            f'<div class="oc"><div class="pl">OUTPUT FILE</div>'
-            f'<div style="font-family:IBM Plex Mono,monospace;font-size:13px;'
-            f'color:#2dd4a8;">📹 {os.path.basename(mp4)}</div>'
-            f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
-            f'color:#555a6a;margin-top:4px;">'
-            f'{info.get("duration", 0):.1f}s · {info.get("size_mb", 0):.1f}MB · '
-            f'codec={info.get("video_codec", "?")} · '
-            f'audio={"✓" if info.get("has_audio") else "✗"}</div></div>',
-            unsafe_allow_html=True)
-
-# Log
-if st.session_state["live_log"]:
-    with log_box.container():
-        st.markdown(
-            '<div class="sl-lbl" style="margin-top:20px;">LOG</div>',
-            unsafe_allow_html=True)
-        lines = st.session_state["live_log"][-60:]
-        st.markdown(
-            '<div class="lg">' + "<br>".join(lines) + '</div>',
-            unsafe_allow_html=True)
-
-# Reset button
-if st.session_state["live_done"]:
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-    if st.button("🔄 เริ่มใหม่", key="reset_btn"):
-        for k, v in _DEF.items():
-            st.session_state[k] = v
+        try:
+            _prog(rec_prog_box, "กำลัง download + ตัดวิดีโอ...", "⬇️", pct=0.10)
+            _rec_log(f"🚀 เริ่ม Pipeline  |  {len(rec_brief.segments)} segment(s)")
+            _rec_log(f"📄 ไฟล์ต้นทาง: {rec_brief.raw_source}")
+            res = run_local_pipeline(
+                brief=rec_brief,
+                out_dir=st.session_state["live_out_dir"],
+                tmp_dir=tmp_dir2,
+                log=_rec_log,
+            )
+            if res["error"]:
+                _rec_log(f"❌ {res['error']}")
+                _prog(rec_prog_box, res["error"][:80], "❌", pct=0)
+            else:
+                st.session_state["rec_mp4"] = res["mp4"]
+                _prog(rec_prog_box, "", done=True)
+                _rec_log("🎉 Pipeline เสร็จสมบูรณ์!")
+                st.session_state["rec_done"] = True
+        except Exception as e:
+            _rec_log(f"❌ Error: {e}")
+            _prog(rec_prog_box, str(e)[:80], "❌", pct=0)
+        finally:
+            st.session_state["rec_running"] = False
+            shutil.rmtree(tmp_dir2, ignore_errors=True)
         st.rerun()
+
+    # ── render Local results ───────────────────────────────────
+    if st.session_state["rec_done"]:
+        mp4 = st.session_state["rec_mp4"]
+        if mp4 and os.path.exists(mp4):
+            info = probe_video(mp4)
+            rec_result_box.markdown(
+                f'<div class="oc"><div class="pl">OUTPUT FILE</div>'
+                f'<div style="font-family:IBM Plex Mono,monospace;font-size:13px;'
+                f'color:#2dd4a8;">📹 {os.path.basename(mp4)}</div>'
+                f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
+                f'color:#555a6a;margin-top:4px;">'
+                f'{info.get("duration", 0):.1f}s · {info.get("size_mb", 0):.1f}MB · '
+                f'codec={info.get("video_codec", "?")} · '
+                f'audio={"✓" if info.get("has_audio") else "✗"}</div></div>',
+                unsafe_allow_html=True)
+
+    if st.session_state["rec_log"]:
+        with rec_log_box.container():
+            st.markdown('<div class="sl-lbl" style="margin-top:20px;">LOG</div>', unsafe_allow_html=True)
+            lines = st.session_state["rec_log"][-60:]
+            st.markdown('<div class="lg">' + "<br>".join(lines) + '</div>', unsafe_allow_html=True)
+
+    if st.session_state["rec_done"]:
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        if st.button("🔄 เริ่มใหม่", key="rec_reset_btn"):
+            for k, v in _REC_DEF.items():
+                st.session_state[k] = v
+            st.rerun()
