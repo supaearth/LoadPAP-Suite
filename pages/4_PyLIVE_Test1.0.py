@@ -665,11 +665,8 @@ def parse_doc_brief(text: str) -> Optional[RecBrief]:
     if src_m:
         raw_source = src_m.group(1).strip()
         if raw_source.startswith("http"):
-            # เป็น URL → extract file ID แล้ว download ตรง ไม่ต้องค้น Drive
             file_id = extract_id(raw_source)
-        else:
-            # plain filename เช่น "REC_0505.mp4" → ค้นใน Drive
-            filename = raw_source
+        # ถ้าไม่ใช่ URL → raw_source เก็บไว้แสดงผล แต่ไม่มี file_id
 
     if not raw_source:
         return None
@@ -792,17 +789,13 @@ def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str, log) -> dict
 
     # ── Step 1: Resolve video file ─────────────────────────────
     file_id = brief.file_id
-    if file_id:
-        log(f"🔗 ใช้ Drive link จาก Doc โดยตรง")
-    elif brief.filename:
-        log(f"🔎 ค้นหาไฟล์ '{brief.filename}' ใน Drive...")
-        file_id = _search_drive_by_name(brief.filename, log)
     if not file_id:
         res["error"] = (
-            f"ไม่พบไฟล์ '{brief.raw_source}' ใน Drive\n"
-            "ตรวจสอบว่าไฟล์มีอยู่และ account มีสิทธิ์เข้าถึง"
+            "ไม่พบ Drive link ใน Doc\n"
+            "กรุณาใส่ลิ้ง Google Drive หลังคำว่า 'ลิงก์คลิปต้นทาง:'"
         )
         return res
+    log(f"🔗 ใช้ Drive link จาก Doc โดยตรง")
 
     # ── Step 2: Download ───────────────────────────────────────
     info = _get_drive_file_info(file_id)
@@ -1266,7 +1259,7 @@ with tab_rec:
                 'margin:14px 0 10px;">✅ อ่าน Doc สำเร็จ</div>', unsafe_allow_html=True)
 
             # source card
-            src_type = "Drive URL" if rec_brief.file_id else "ชื่อไฟล์ (จะค้นหาใน Drive)"
+            src_type = "Drive URL ✅" if rec_brief.file_id else "⚠️ ไม่พบ Drive link — กรุณาใส่ลิ้ง"
             st.markdown(
                 f'<div class="src-card">'
                 f'<div class="pl">ไฟล์วิดีโอ</div>'
