@@ -1247,6 +1247,9 @@ with tab_rec:
                             st.session_state["rec_log"]   = []
                         else:
                             st.error("❌ Parse ไม่ได้ — ตรวจสอบว่า Doc มี 'ลิงก์คลิปต้นทาง' และ 'Tc'")
+                            # debug: แสดง raw text 500 ตัวแรก
+                            with st.expander("🐛 Debug — raw doc text"):
+                                st.code(repr(doc_text[:1000]))
                 except Exception as e:
                     st.error(f"❌ อ่าน Doc ล้มเหลว: {e}")
 
@@ -1268,6 +1271,14 @@ with tab_rec:
                 f'<div style="font-family:IBM Plex Mono,monospace;font-size:10px;'
                 f'color:#555a6a;margin-top:3px;">{src_type}</div>'
                 f'</div>', unsafe_allow_html=True)
+            # debug: แสดง file_id ที่ได้
+            with st.expander("🐛 Debug — parsed values"):
+                st.code(
+                    f"raw_source : {repr(rec_brief.raw_source)}\n"
+                    f"file_id    : {repr(rec_brief.file_id)}\n"
+                    f"filename   : {repr(rec_brief.filename)}\n"
+                    f"segments   : {len(rec_brief.segments)}"
+                )
 
             # cover / caption
             if rec_brief.cover_text:
