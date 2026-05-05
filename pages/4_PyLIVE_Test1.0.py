@@ -601,13 +601,25 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
 # 10. MODULE 8 — DOC READER + LOCAL BRIEF PARSER
 # ============================================================
 def _read_doc_text(doc_id: str) -> str:
-    """อ่าน Google Doc แล้วคืน plain text"""
+    """
+    อ่าน Google Doc คืน plain text
+    ถ้า textRun มี hyperlink → แทนที่ content ด้วย URL จริง
+    (ลิ้งใน Google Doc เก็บ URL ใน textStyle.link.url ไม่ใช่ใน content)
+    """
     service = get_docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
     text = ""
     for element in doc.get("body", {}).get("content", []):
         for para_elem in element.get("paragraph", {}).get("elements", []):
-            text += para_elem.get("textRun", {}).get("content", "")
+            run = para_elem.get("textRun", {})
+            content = run.get("content", "")
+            # ถ้า textRun นี้เป็น hyperlink → ใช้ URL แทน display text
+            link_url = (run.get("textStyle", {})
+                           .get("link", {})
+                           .get("url", ""))
+            if link_url:
+                content = link_url + "\n"
+            text += content
     return text
 
 def _tc_to_sec_local(tc_str: str) -> int:
