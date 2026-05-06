@@ -37,4 +37,4 @@ echo "__pycache__/" >> .gitignore
 echo ".claude/" >> .gitignore
 git add .gitignore
 git commit -m "add .claude to gitignore"
-git push origin dev
+git push origin dev.pylive_cache/

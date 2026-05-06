@@ -850,6 +850,22 @@ def _ffmpeg_cut(src: str, start_sec: int, end_sec: int, out: str) -> bool:
         capture_output=True)
     return r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 10*1024
 
+_VIDEO_CACHE_DIR = os.path.join(_ROOT, ".pylive_cache")
+
+def _get_cached_video(file_id: str, ext: str) -> Optional[str]:
+    """คืน path ของไฟล์ที่ cache ไว้วันนี้ หรือ None ถ้ายังไม่มี"""
+    today = datetime.date.today().strftime("%Y%m%d")
+    cache_path = os.path.join(_VIDEO_CACHE_DIR, f"{today}_{file_id}{ext}")
+    if os.path.exists(cache_path) and os.path.getsize(cache_path) > 1024:
+        return cache_path
+    return None
+
+def _cache_path_for(file_id: str, ext: str) -> str:
+    """คืน path ที่จะเก็บ cache ของไฟล์"""
+    os.makedirs(_VIDEO_CACHE_DIR, exist_ok=True)
+    today = datetime.date.today().strftime("%Y%m%d")
+    return os.path.join(_VIDEO_CACHE_DIR, f"{today}_{file_id}{ext}")
+
 def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str, log) -> dict:
     res = {"mp4": None, "error": None}
     os.makedirs(out_dir, exist_ok=True)
@@ -862,16 +878,23 @@ def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str, log) -> dict
             "กรุณาใส่ลิ้ง Google Drive หลังคำว่า 'ลิงก์คลิปต้นทาง:'"
         )
         return res
-    log(f"🔗 ใช้ Drive link จาก Doc โดยตรง")
 
-    # ── Step 2: Download ───────────────────────────────────────
+    # ── Step 2: Download (with cache) ─────────────────────────
     info = _get_drive_file_info(file_id)
     ext  = Path(info.get("name", "video.mp4")).suffix or ".mp4"
-    src_path = os.path.join(tmp_dir, f"source{ext}")
-    log(f"⬇️  กำลัง download: {info.get('name', file_id)}")
-    if not _download_drive_file(file_id, src_path, log):
-        res["error"] = "Download ไฟล์จาก Drive ล้มเหลว"
-        return res
+    fname = info.get("name", file_id)
+
+    cached = _get_cached_video(file_id, ext)
+    if cached:
+        log(f"💾 ใช้ไฟล์ cache วันนี้: {os.path.basename(cached)}")
+        src_path = cached
+    else:
+        src_path = _cache_path_for(file_id, ext)
+        log(f"⬇️  กำลัง download: {fname}")
+        if not _download_drive_file(file_id, src_path, log):
+            res["error"] = "Download ไฟล์จาก Drive ล้มเหลว"
+            return res
+        log(f"💾 บันทึก cache: {os.path.basename(src_path)}")
 
     # ── Step 3: FFmpeg cut ─────────────────────────────────────
     seg_paths = []
