@@ -83,6 +83,7 @@ class RecBrief:
     raw_source:  str            # raw string จาก doc (URL หรือชื่อไฟล์)
     file_id:     Optional[str]  # Drive file ID (ถ้าเป็น URL)
     filename:    Optional[str]  # ชื่อไฟล์ (ถ้าไม่ใช่ URL)
+    doc_title:   str = ""       # ชื่อ Google Doc
     cover_text:  str
     caption:     str
     segments:    list[RecSegment] = field(default_factory=list)
@@ -600,17 +601,19 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
 # ============================================================
 # 10. MODULE 8 — DOC READER + LOCAL BRIEF PARSER
 # ============================================================
-def _read_doc_text(doc_id: str) -> tuple[str, Optional[str]]:
+def _read_doc_text(doc_id: str) -> tuple[str, Optional[str], str]:
     """
-    อ่าน Google Doc คืน (plain_text, drive_url)
+    อ่าน Google Doc คืน (plain_text, drive_url, doc_title)
     - plain_text: text ปกติ (display text ไม่มี URL)
     - drive_url: URL แรกที่เจอจาก hyperlink ในย่อหน้าถัดจาก 'ลิงก์คลิปต้นทาง'
+    - doc_title: ชื่อ Google Doc
 
     เหตุที่แยก: hyperlink ใน Google Doc เก็บ URL ใน textStyle.link.url
     ไม่ได้อยู่ใน content text เลยต้อง scan structure โดยตรง
     """
     service = get_docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
+    doc_title = doc.get("title", "")
     body_content = doc.get("body", {}).get("content", [])
 
     paragraphs = []  # [(plain_text, [urls_in_para])]
@@ -657,7 +660,7 @@ def _read_doc_text(doc_id: str) -> tuple[str, Optional[str]]:
                     break
             break
 
-    return plain_text, drive_url
+    return plain_text, drive_url, doc_title
 
 
 def _extract_all_urls_from_para(para: dict) -> list[str]:
@@ -702,10 +705,11 @@ def _sec_to_display(sec: int) -> str:
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
-def parse_doc_brief(text: str, drive_url: Optional[str] = None) -> Optional[RecBrief]:
+def parse_doc_brief(text: str, drive_url: Optional[str] = None, doc_title: str = "") -> Optional[RecBrief]:
     """
     Parse Google Doc script text → RecBrief
     drive_url: URL จาก hyperlink ที่ _read_doc_text scan มาโดยตรง
+    doc_title: ชื่อ Google Doc (ใช้ตั้งชื่อไฟล์ output)
     """
     # ── cover ──────────────────────────────────────────────
     cover_m = re.search(
@@ -770,6 +774,7 @@ def parse_doc_brief(text: str, drive_url: Optional[str] = None) -> Optional[RecB
         cover_text=cover_text,
         caption=caption,
         segments=segments,
+        doc_title=doc_title,
     )
 
 # ============================================================
@@ -924,7 +929,8 @@ def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str,
 
     # ── Step 4: Concat ─────────────────────────────────────────
     log("⚡ FFmpeg Concat...")
-    safe_cover = re.sub(r'[\\/*?:"<>|\'\n\r]', '', brief.cover_text)[:40].strip()
+    name_src   = brief.doc_title or brief.cover_text
+    safe_cover = re.sub(r'[\\/*?:"<>|\'\n\r]', '', name_src)[:50].strip()
     ts_stamp   = time.strftime("%Y%m%d_%H%M")
     out_mp4    = os.path.join(out_dir, f"PyLIVE_{safe_cover}_{ts_stamp}.mp4")
     if not concat_segments(seg_paths, out_mp4, tmp_dir):
@@ -1337,8 +1343,8 @@ with tab_rec:
                     if not doc_id:
                         st.error("❌ ไม่สามารถ extract ID จาก URL ได้")
                     else:
-                        doc_text, drive_url = _read_doc_text(doc_id)
-                        brief    = parse_doc_brief(doc_text, drive_url)
+                        doc_text, drive_url, doc_title = _read_doc_text(doc_id)
+                        brief    = parse_doc_brief(doc_text, drive_url, doc_title)
                         if brief:
                             st.session_state["rec_brief"] = brief
                             st.session_state["rec_done"]  = False
