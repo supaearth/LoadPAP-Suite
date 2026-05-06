@@ -810,14 +810,18 @@ def _get_drive_file_info(file_id: str) -> dict:
     except:
         return {}
 
-def _download_drive_file(file_id: str, out_path: str, log=None) -> bool:
-    """Download ไฟล์จาก Drive แบบ chunked พร้อม progress log"""
+def _download_drive_file(file_id: str, out_path: str,
+                         log=None, progress_cb=None) -> bool:
+    """
+    Download ไฟล์จาก Drive แบบ chunked
+    progress_cb(float 0.0–1.0): callback อัปเดต progress bar
+    """
     def _info(msg):
         if log: log(msg)
     try:
-        service  = get_drive_service()
-        request  = service.files().get_media(fileId=file_id)
-        last_pct = -1
+        service    = get_drive_service()
+        request    = service.files().get_media(fileId=file_id)
+        last_pct   = -1
         with open(out_path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request, chunksize=20*1024*1024)
             done = False
@@ -825,6 +829,8 @@ def _download_drive_file(file_id: str, out_path: str, log=None) -> bool:
                 status, done = downloader.next_chunk()
                 if status:
                     pct = int(status.progress() * 100)
+                    if progress_cb:
+                        progress_cb(status.progress())
                     if pct >= last_pct + 10:
                         _info(f"  ⬇️  Download {pct}%")
                         last_pct = pct
@@ -832,6 +838,8 @@ def _download_drive_file(file_id: str, out_path: str, log=None) -> bool:
         if ok:
             size_mb = os.path.getsize(out_path) / (1024*1024)
             _info(f"  ✅ Download เสร็จ — {size_mb:.1f} MB")
+            if progress_cb:
+                progress_cb(1.0)
         return ok
     except Exception as e:
         _info(f"  ❌ Download error: {e}")
@@ -866,7 +874,8 @@ def _cache_path_for(file_id: str, ext: str) -> str:
     today = datetime.date.today().strftime("%Y%m%d")
     return os.path.join(_VIDEO_CACHE_DIR, f"{today}_{file_id}{ext}")
 
-def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str, log) -> dict:
+def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str,
+                       log, progress_cb=None) -> dict:
     res = {"mp4": None, "error": None}
     os.makedirs(out_dir, exist_ok=True)
 
@@ -891,7 +900,7 @@ def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str, log) -> dict
     else:
         src_path = _cache_path_for(file_id, ext)
         log(f"⬇️  กำลัง download: {fname}")
-        if not _download_drive_file(file_id, src_path, log):
+        if not _download_drive_file(file_id, src_path, log, progress_cb):
             res["error"] = "Download ไฟล์จาก Drive ล้มเหลว"
             return res
         log(f"💾 บันทึก cache: {os.path.basename(src_path)}")
@@ -1411,9 +1420,11 @@ with tab_rec:
 
     with col_r2:
         st.markdown('<div class="sl-lbl">02 — ผลลัพธ์</div>', unsafe_allow_html=True)
-        rec_prog_box   = st.empty()
-        rec_result_box = st.empty()
-        rec_log_box    = st.empty()
+        rec_prog_box      = st.empty()
+        rec_dl_label_box  = st.empty()
+        rec_dl_bar_box    = st.empty()
+        rec_result_box    = st.empty()
+        rec_log_box       = st.empty()
 
     # ── Local pipeline ────────────────────────────────────────
     if rec_run_btn and rec_brief:
@@ -1430,23 +1441,42 @@ with tab_rec:
             _prog(rec_prog_box, "กำลัง download + ตัดวิดีโอ...", "⬇️", pct=0.10)
             _rec_log(f"🚀 เริ่ม Pipeline  |  {len(rec_brief.segments)} segment(s)")
             _rec_log(f"📄 ไฟล์ต้นทาง: {rec_brief.raw_source}")
+
+            # progress bar สำหรับ download
+            rec_dl_label_box.markdown(
+                '<div style="font-family:IBM Plex Mono,monospace;font-size:10px;'
+                'color:#555a6a;text-transform:uppercase;letter-spacing:.08em;'
+                'margin-bottom:4px;">⬇️ Download Progress</div>',
+                unsafe_allow_html=True)
+            dl_bar = rec_dl_bar_box.progress(0)
+
+            def _dl_progress(ratio: float):
+                dl_bar.progress(min(ratio, 1.0))
+
             res = run_local_pipeline(
                 brief=rec_brief,
                 out_dir=st.session_state["live_out_dir"],
                 tmp_dir=tmp_dir2,
                 log=_rec_log,
+                progress_cb=_dl_progress,
             )
             if res["error"]:
                 _rec_log(f"❌ {res['error']}")
                 _prog(rec_prog_box, res["error"][:80], "❌", pct=0)
+                rec_dl_label_box.empty()
+                rec_dl_bar_box.empty()
             else:
                 st.session_state["rec_mp4"] = res["mp4"]
                 _prog(rec_prog_box, "", done=True)
+                rec_dl_label_box.empty()
+                rec_dl_bar_box.empty()
                 _rec_log("🎉 Pipeline เสร็จสมบูรณ์!")
                 st.session_state["rec_done"] = True
         except Exception as e:
             _rec_log(f"❌ Error: {e}")
             _prog(rec_prog_box, str(e)[:80], "❌", pct=0)
+            rec_dl_label_box.empty()
+            rec_dl_bar_box.empty()
         finally:
             st.session_state["rec_running"] = False
             shutil.rmtree(tmp_dir2, ignore_errors=True)
