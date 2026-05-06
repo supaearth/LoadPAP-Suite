@@ -600,27 +600,58 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
 # ============================================================
 # 10. MODULE 8 — DOC READER + LOCAL BRIEF PARSER
 # ============================================================
-def _read_doc_text(doc_id: str) -> str:
+def _read_doc_text(doc_id: str) -> tuple[str, Optional[str]]:
     """
-    อ่าน Google Doc คืน plain text
-    ถ้า textRun มี hyperlink → แทนที่ content ด้วย URL จริง
-    (ลิ้งใน Google Doc เก็บ URL ใน textStyle.link.url ไม่ใช่ใน content)
+    อ่าน Google Doc คืน (plain_text, drive_url)
+    - plain_text: text ปกติ (display text ไม่มี URL)
+    - drive_url: URL แรกที่เจอจาก hyperlink ในย่อหน้าถัดจาก 'ลิงก์คลิปต้นทาง'
+
+    เหตุที่แยก: hyperlink ใน Google Doc เก็บ URL ใน textStyle.link.url
+    ไม่ได้อยู่ใน content text เลยต้อง scan structure โดยตรง
     """
     service = get_docs_service()
     doc = service.documents().get(documentId=doc_id).execute()
-    text = ""
-    for element in doc.get("body", {}).get("content", []):
-        for para_elem in element.get("paragraph", {}).get("elements", []):
-            run = para_elem.get("textRun", {})
-            content = run.get("content", "")
-            # ถ้า textRun นี้เป็น hyperlink → ใช้ URL แทน display text
-            link_url = (run.get("textStyle", {})
-                           .get("link", {})
-                           .get("url", ""))
-            if link_url:
-                content = link_url + "\n"
-            text += content
-    return text
+    body_content = doc.get("body", {}).get("content", [])
+
+    paragraphs = []  # [(plain_text, [urls_in_para])]
+    for element in body_content:
+        para = element.get("paragraph")
+        if not para:
+            continue
+        para_text = ""
+        para_urls = []
+        for run_elem in para.get("elements", []):
+            run = run_elem.get("textRun", {})
+            para_text += run.get("content", "")
+            url = run.get("textStyle", {}).get("link", {}).get("url", "")
+            if url:
+                para_urls.append(url)
+        paragraphs.append((para_text, para_urls))
+
+    # รวม plain text ทั้งหมด
+    plain_text = "".join(p[0] for p in paragraphs)
+
+    # หา Drive URL: scan ย่อหน้าที่มี "ลิงก์คลิปต้นทาง" และย่อหน้าถัดไป
+    drive_url = None
+    for i, (para_text, para_urls) in enumerate(paragraphs):
+        if "ลิงก์คลิปต้นทาง" in para_text:
+            # URL อาจอยู่ในย่อหน้าเดียวกัน หรือย่อหน้าถัดไป
+            for url in para_urls:
+                if url.startswith("http"):
+                    drive_url = url
+                    break
+            if not drive_url:
+                # ดูย่อหน้าถัดไปอีก 3 ย่อหน้า
+                for j in range(i + 1, min(i + 4, len(paragraphs))):
+                    for url in paragraphs[j][1]:
+                        if url.startswith("http"):
+                            drive_url = url
+                            break
+                    if drive_url:
+                        break
+            break
+
+    return plain_text, drive_url
 
 def _tc_to_sec_local(tc_str: str) -> int:
     """
@@ -641,15 +672,10 @@ def _sec_to_display(sec: int) -> str:
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
-def parse_doc_brief(text: str) -> Optional[RecBrief]:
+def parse_doc_brief(text: str, drive_url: Optional[str] = None) -> Optional[RecBrief]:
     """
     Parse Google Doc script text → RecBrief
-
-    รองรับ format:
-      ปก : 'title'
-      Caption / แคปชั่น : ...
-      ลิงก์คลิปต้นทาง: <Drive URL หรือชื่อไฟล์>  ← หลักแนวเดียวกัน, fallback บรรทัดถัดไป
-      Tc / TC : → บรรทัดถัดไปเป็น TC segments
+    drive_url: URL จาก hyperlink ที่ _read_doc_text scan มาโดยตรง
     """
     # ── cover ──────────────────────────────────────────────
     cover_m = re.search(
@@ -666,19 +692,18 @@ def parse_doc_brief(text: str) -> Optional[RecBrief]:
         text, re.DOTALL | re.IGNORECASE)
     caption = caption_m.group(1).strip() if caption_m else ""
 
-    # ── video source (Drive link หรือชื่อไฟล์) ────────────
-    # รองรับ 2 format:
-    #   "ลิงก์คลิปต้นทาง: <value>"  (หลัง colon บรรทัดเดียวกัน) ← หลัก
-    #   "ลิงก์คลิปต้นทาง\n<value>"  (บรรทัดถัดไป)                ← fallback
+    # ── video source ───────────────────────────────────────
     raw_source, file_id, filename = "", None, None
-    src_m = re.search(r'ลิงก์คลิปต้นทาง\s*:\s*([^\n]+)', text)
-    if not src_m:
-        src_m = re.search(r'ลิงก์คลิปต้นทาง[^\n]*\n+([^\n]+)', text)
-    if src_m:
-        raw_source = src_m.group(1).strip()
-        if raw_source.startswith("http"):
-            file_id = extract_id(raw_source)
-        # ถ้าไม่ใช่ URL → raw_source เก็บไว้แสดงผล แต่ไม่มี file_id
+    if drive_url:
+        # ได้ URL จาก hyperlink structure โดยตรง — เชื่อถือได้สุด
+        raw_source = drive_url
+        file_id    = extract_id(drive_url)
+    else:
+        # fallback: หา URL เปล่าๆ ในข้อความ (กรณีไม่ใช่ hyperlink)
+        src_m = re.search(r'ลิงก์คลิปต้นทาง\s*[:\s]+\s*(https?://[^\s\n]+)', text)
+        if src_m:
+            raw_source = src_m.group(1).strip()
+            file_id    = extract_id(raw_source)
 
     if not raw_source:
         return None
@@ -1250,8 +1275,8 @@ with tab_rec:
                     if not doc_id:
                         st.error("❌ ไม่สามารถ extract ID จาก URL ได้")
                     else:
-                        doc_text = _read_doc_text(doc_id)
-                        brief    = parse_doc_brief(doc_text)
+                        doc_text, drive_url = _read_doc_text(doc_id)
+                        brief    = parse_doc_brief(doc_text, drive_url)
                         if brief:
                             st.session_state["rec_brief"] = brief
                             st.session_state["rec_done"]  = False
