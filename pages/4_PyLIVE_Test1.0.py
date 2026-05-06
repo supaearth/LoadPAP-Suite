@@ -83,9 +83,9 @@ class RecBrief:
     raw_source:  str            # raw string จาก doc (URL หรือชื่อไฟล์)
     file_id:     Optional[str]  # Drive file ID (ถ้าเป็น URL)
     filename:    Optional[str]  # ชื่อไฟล์ (ถ้าไม่ใช่ URL)
-    doc_title:   str = ""       # ชื่อ Google Doc
     cover_text:  str
     caption:     str
+    doc_title:   str = ""       # ชื่อ Google Doc
     segments:    list[RecSegment] = field(default_factory=list)
 
 class NoClock(Exception):
