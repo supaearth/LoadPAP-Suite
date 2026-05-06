@@ -619,39 +619,69 @@ def _read_doc_text(doc_id: str) -> tuple[str, Optional[str]]:
         if not para:
             continue
         para_text = ""
+        for run_elem in para.get("elements", []):
+            para_text += run_elem.get("textRun", {}).get("content", "")
+        # ดึง URL จากทุก element ใน paragraph (hyperlink + rich chip)
         para_urls = []
         for run_elem in para.get("elements", []):
-            run = run_elem.get("textRun", {})
-            para_text += run.get("content", "")
-            url = run.get("textStyle", {}).get("link", {}).get("url", "")
+            # hyperlink
+            url = (run_elem.get("textRun", {})
+                           .get("textStyle", {})
+                           .get("link", {})
+                           .get("url", ""))
             if url:
                 para_urls.append(url)
+            # Drive file chip / smart chip
+            rich_url = (run_elem.get("richLink", {})
+                                .get("richLinkProperties", {})
+                                .get("uri", ""))
+            if rich_url:
+                para_urls.append(rich_url)
         paragraphs.append((para_text, para_urls))
 
     # รวม plain text ทั้งหมด
     plain_text = "".join(p[0] for p in paragraphs)
 
     # หา Drive URL: scan ย่อหน้าที่มี "ลิงก์คลิปต้นทาง" และย่อหน้าถัดไป
+    # รองรับทั้ง hyperlink (textStyle.link) และ Drive file chip (richLink)
     drive_url = None
     for i, (para_text, para_urls) in enumerate(paragraphs):
         if "ลิงก์คลิปต้นทาง" in para_text:
-            # URL อาจอยู่ในย่อหน้าเดียวกัน หรือย่อหน้าถัดไป
-            for url in para_urls:
-                if url.startswith("http"):
-                    drive_url = url
-                    break
-            if not drive_url:
-                # ดูย่อหน้าถัดไปอีก 3 ย่อหน้า
-                for j in range(i + 1, min(i + 4, len(paragraphs))):
-                    for url in paragraphs[j][1]:
-                        if url.startswith("http"):
-                            drive_url = url
-                            break
-                    if drive_url:
+            # ดูบรรทัดเดียวกันก่อน แล้วดูถัดไป 3 ย่อหน้า
+            for j in range(i, min(i + 4, len(paragraphs))):
+                for url in paragraphs[j][1]:
+                    if url.startswith("http"):
+                        drive_url = url
                         break
+                if drive_url:
+                    break
             break
 
     return plain_text, drive_url
+
+
+def _extract_all_urls_from_para(para: dict) -> list[str]:
+    """
+    Extract URL จาก paragraph element ทุกรูปแบบ:
+    1. textRun.textStyle.link.url  — hyperlink ธรรมดา
+    2. richLink.richLinkProperties.uri — Drive file chip / smart chip
+    """
+    urls = []
+    for elem in para.get("elements", []):
+        # 1. hyperlink
+        url = (elem.get("textRun", {})
+                   .get("textStyle", {})
+                   .get("link", {})
+                   .get("url", ""))
+        if url:
+            urls.append(url)
+        # 2. Drive file chip / smart chip
+        rich_url = (elem.get("richLink", {})
+                        .get("richLinkProperties", {})
+                        .get("uri", ""))
+        if rich_url:
+            urls.append(rich_url)
+    return urls
 
 def _tc_to_sec_local(tc_str: str) -> int:
     """
