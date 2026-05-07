@@ -426,15 +426,12 @@ def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
         if log: log(msg)
 
     if manual_ref:
-        try:
-            clock_sec    = hhmm_to_sec(manual_ref["clock"])
-            video_pos    = int(manual_ref["video_pos"])
-            stream_start = clock_sec - video_pos
-            h, m, s = stream_start // 3600, (stream_start % 3600) // 60, stream_start % 60
-            _info(f"  ✋ Manual calibration → stream_start = {h:02d}:{m:02d}:{s:02d}")
-            return CalibResult(stream_start_sec=stream_start, confidence=1.0, method_used="manual")
-        except Exception as e:
-            _info(f"  ⚠️  Manual ref error: {e} — ข้ามไป OCR")
+        clock_sec    = hhmm_to_sec(manual_ref["clock"])
+        video_pos    = int(manual_ref["video_pos"])
+        stream_start = clock_sec - video_pos
+        h, m, s = stream_start // 3600, (stream_start % 3600) // 60, stream_start % 60
+        _info(f"  ✋ Manual calibration → stream_start = {h:02d}:{m:02d}:{s:02d}")
+        return CalibResult(stream_start_sec=stream_start, confidence=1.0, method_used="manual")
 
     if stream_info.release_timestamp:
         dt = datetime.datetime.fromtimestamp(stream_info.release_timestamp)
