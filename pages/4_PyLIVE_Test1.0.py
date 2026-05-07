@@ -26,10 +26,10 @@ from utils import (load_config, inject_global_css,
 # 0.  CONSTANTS
 # ============================================================
 SAFETY_BUFFER_SEC = 2
-PROBE_DURATION    = 90
+PROBE_DURATION    = 15   # โหลดแค่ 15 วิต่อ probe (พอ scan 2-3 frame)
 OCR_CROP_RATIO    = {"left": 0.82, "top": 0.02, "right": 1.00, "bottom": 0.12}
-SCAN_START        = 10
-SCAN_END          = 65
+SCAN_START        = 2
+SCAN_END          = 14
 SCAN_STEP         = 5
 
 # ============================================================
@@ -405,7 +405,7 @@ def _ocr_calibrate(probe_clip: str, t_found: float, clock_found: str,
     estimates = [est_0]
     _info(f"  📐 T={video_offset+t_found:.0f}s (abs) → {clock_found} → start estimate = "
           f"{est_0//3600:02d}:{(est_0%3600)//60:02d}:{est_0%60:02d}")
-    for t in [t_found + 15, t_found + 30]:
+    for t in [t_found + 5, t_found + 10]:
         if t >= dur - 1:
             continue
         clock = _try_ocr_at(probe_clip, t, tmp_dir, api_key, "calib")
@@ -482,7 +482,7 @@ def _download_probe_clip(url: str, out_dir: str, start_sec: int = 0) -> Optional
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
         for f in Path(out_dir).glob(f"{tag}.*"):
-            if get_duration(str(f)) >= 10:
+            if get_duration(str(f)) >= 3:
                 return str(f)
             os.remove(str(f))
             break
