@@ -249,12 +249,14 @@ def scan_file_location(video_id, src_f, arc_f, drive_service):
     valid_exts = ('.mp4', '.mov', '.m4v', '.avi') + IMAGE_EXTS
     if src_f and os.path.exists(src_f):
         for f in os.listdir(src_f):
+            if f.startswith('._'): continue  # ข้าม macOS AppleDouble metadata
             if f.lower().endswith(valid_exts) and search_id in f.lower():
                 full_path = os.path.join(src_f, f)
                 if os.path.getsize(full_path) > 0:
                     return "Source", full_path
     if arc_f and os.path.exists(arc_f):
         for f in os.listdir(arc_f):
+            if f.startswith('._'): continue  # ข้าม macOS AppleDouble metadata
             if f.lower().endswith(valid_exts) and search_id in f.lower():
                 full_path = os.path.join(arc_f, f)
                 if os.path.getsize(full_path) > 0:
@@ -531,6 +533,7 @@ if read_btn and sheet_url:
                 for folder in [src_f, arc_f]:
                     if folder and os.path.exists(folder):
                         for f in os.listdir(folder):
+                            if f.startswith('._'): continue  # ข้าม macOS AppleDouble metadata
                             if f.lower().endswith(valid_exts) and search_id in f.lower():
                                 full_path = os.path.join(folder, f)
                                 if os.path.getsize(full_path) > 0:
