@@ -177,22 +177,32 @@ echo ""
 # ─── เช็ค internet ก่อน pull ───
 echo "🔄 กำลังเช็ค update..."
 if ping -c 1 github.com &> /dev/null; then
+    HEAD_BEFORE=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
     git -C "$PROJECT_DIR" fetch origin main -q 2>/dev/null
+    FETCH_OK=$?
 
-    # merge แบบ safe — ถ้า conflict เอาของ local ไว้เสมอ
-    MERGE_OUTPUT=$(git -C "$PROJECT_DIR" merge -X ours origin/main 2>&1)
-
-    if echo "$MERGE_OUTPUT" | grep -q "Already up to date"; then
-        echo "✅ โปรแกรมเป็นเวอร์ชันล่าสุดแล้ว"
+    if [ $FETCH_OK -ne 0 ]; then
+        echo "⚠️  fetch ไม่สำเร็จ — ข้ามการ update"
     else
-        echo "✅ อัพเดทเสร็จแล้ว"
+        git -C "$PROJECT_DIR" merge --ff-only origin/main -q 2>/dev/null
+        MERGE_OK=$?
+        HEAD_AFTER=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 
-        # เช็คว่า requirements.txt เปลี่ยนมั้ย
-        CHANGED=$(git -C "$PROJECT_DIR" diff HEAD@{{1}} HEAD --name-only 2>/dev/null | grep requirements.txt)
-        if [ -n "$CHANGED" ]; then
-            echo "📦 กำลังอัพเดท packages..."
-            "$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt" -q
-            echo "✅ อัพเดท packages เสร็จแล้ว"
+        if [ "$HEAD_BEFORE" = "$HEAD_AFTER" ]; then
+            echo "✅ โปรแกรมเป็นเวอร์ชันล่าสุดแล้ว"
+        elif [ $MERGE_OK -eq 0 ]; then
+            echo "✅ อัพเดทเสร็จแล้ว"
+
+            # เช็คว่า requirements.txt เปลี่ยนมั้ย
+            CHANGED=$(git -C "$PROJECT_DIR" diff "$HEAD_BEFORE" HEAD --name-only 2>/dev/null | grep requirements.txt)
+            if [ -n "$CHANGED" ]; then
+                echo "📦 กำลังอัพเดท packages..."
+                "$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt" -q
+                echo "✅ อัพเดท packages เสร็จแล้ว"
+            fi
+        else
+            echo "⚠️  อัพเดทไม่สำเร็จ — มีไฟล์แก้ไขค้างอยู่ในเครื่อง"
+            echo "   กรุณาแจ้งผู้ดูแลโปรแกรม"
         fi
     fi
 else
