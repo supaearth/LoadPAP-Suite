@@ -480,6 +480,57 @@ def _download_probe_clip(url: str, out_dir: str) -> Optional[str]:
     except:
         return None
 
+def _grab_live_tail(url: str, out_dir: str) -> Optional[str]:
+    """ดึงวิดีโอ ~20 วินาทีล่าสุดจาก DVR live stream"""
+    ffmpeg_exe = _get_ffmpeg_exe()
+    out = os.path.join(out_dir, "live_tail.mp4")
+    opts = {
+        'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best',
+        'merge_output_format': 'mp4',
+        'outtmpl': out.replace('.mp4', '.%(ext)s'),
+        'download_ranges': yt_dlp.utils.download_range_func(None, [(-20, None)]),
+        'quiet': True, 'no_warnings': True, 'noplaylist': True,
+        'ffmpeg_location': ffmpeg_exe,
+        'retries': 2, 'socket_timeout': 30,
+        'live_from_start': False,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+        for f in Path(out_dir).glob("live_tail.*"):
+            if get_duration(str(f)) >= 5:
+                return str(f)
+    except:
+        pass
+    return None
+
+def quick_clock_check(url: str, tmp_dir: str, api_key: str,
+                      log=None) -> Optional[tuple[str, int]]:
+    """
+    ดึง 20 วิล่าสุดของ live stream → OCR นาฬิกา
+    คืน (clock_HH:MM:SS, video_pos_sec) หรือ None ถ้าล้มเหลว
+    video_pos_sec = ตำแหน่งของ frame ที่ OCR ได้ในไฟล์นั้น
+    """
+    def _info(msg):
+        if log: log(msg)
+    _info("  📥 ดึงวิดีโอ 20 วิล่าสุด...")
+    clip = _grab_live_tail(url, tmp_dir)
+    if not clip:
+        _info("  ❌ ดึงวิดีโอล้มเหลว — อาจไม่รองรับ DVR")
+        return None
+    dur = get_duration(clip)
+    _info(f"  📏 ได้ {dur:.1f}s")
+    # scan จากท้ายคลิปย้อนกลับมา (นาฬิกาควรเห็นชัดตอนท้าย)
+    for t in [dur - 2, dur - 5, dur - 8, 5, 2]:
+        if t < 0:
+            continue
+        clock = _try_ocr_at(clip, t, tmp_dir, api_key, "tail")
+        if clock:
+            _info(f"  🕐 พบนาฬิกา T={t:.0f}s → {clock}")
+            return (clock, int(t))
+    _info("  ❌ ไม่พบนาฬิกาในคลิป")
+    return None
+
 def download_segment(url: str, vs: float, ve: float, out: str) -> bool:
     ffmpeg_exe = _get_ffmpeg_exe()
     opts = {
@@ -1026,12 +1077,14 @@ textarea,input[type=text]{font-family:'IBM Plex Mono',monospace!important;font-s
 
 # ── session state ─────────────────────────────────────────────
 _YT_DEF = {
-    "live_running":  False,
-    "live_done":     False,
-    "live_mp4":      None,
-    "live_log":      [],
-    "live_calib":    None,
-    "need_manual":   False,
+    "live_running":      False,
+    "live_done":         False,
+    "live_mp4":          None,
+    "live_log":          [],
+    "live_calib":        None,
+    "need_manual":       False,
+    "clock_checking":    False,
+    "clock_check_result": None,  # (clock_str, video_pos_sec) หรือ "error"
 }
 _REC_DEF = {
     "rec_running":   False,
@@ -1204,15 +1257,51 @@ with tab_yt:
             st.markdown(
                 '<div style="font-family:IBM Plex Sans Thai,sans-serif;font-size:12px;'
                 'color:#8b90a0;margin-bottom:10px;">'
-                'ใช้เมื่อ OCR ล้มเหลว หรือนาฬิกาไม่ปรากฏในวิดีโอ</div>',
+                'ใช้เมื่อ OCR ล้มเหลว หรือต้องการระบุเวลาอ้างอิงเอง</div>',
                 unsafe_allow_html=True)
+
+            # ── ปุ่มเช็คนาฬิกาอัตโนมัติ ────────────────────────
+            _url_for_check = parsed.youtube_url if parsed else ""
+            check_btn = st.button(
+                "📸  เช็คนาฬิกาตอนนี้",
+                disabled=(not _url_for_check) or st.session_state["clock_checking"],
+                use_container_width=True, key="clock_check_btn")
+
+            _ck_result = st.session_state.get("clock_check_result")
+            if _ck_result and _ck_result != "error":
+                _ck_clock, _ck_vpos = _ck_result
+                mm, ss = _ck_vpos // 60, _ck_vpos % 60
+                st.markdown(
+                    f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
+                    f'color:#2dd4a8;margin:6px 0 10px;">✅ พบนาฬิกา {_ck_clock} '
+                    f'@ วิดีโอ {mm:02d}.{ss:02d} — กรอกด้านล่างอัตโนมัติแล้ว</div>',
+                    unsafe_allow_html=True)
+            elif _ck_result == "error":
+                st.markdown(
+                    '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
+                    'color:#ff4d4d;margin:6px 0 10px;">❌ ไม่พบนาฬิกา — กรอกเองด้านล่าง</div>',
+                    unsafe_allow_html=True)
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            # auto-fill value ถ้าเพิ่งเช็คมา
+            _default_clock = ""
+            _default_vpos  = ""
+            if _ck_result and _ck_result != "error":
+                _ck_clock, _ck_vpos = _ck_result
+                _default_clock = _ck_clock
+                mm, ss = _ck_vpos // 60, _ck_vpos % 60
+                _default_vpos  = f"{mm:02d}.{ss:02d}"
+
             mc1, mc2 = st.columns(2)
             with mc1:
                 man_clock = st.text_input(
-                    "เวลาบนหน้าจอ (HH:MM:SS)", placeholder="14:35:22", key="man_clock")
+                    "เวลาบนหน้าจอ (HH:MM:SS)", placeholder="14:35:22",
+                    value=_default_clock, key="man_clock")
             with mc2:
                 man_vpos = st.text_input(
-                    "ตำแหน่งในวิดีโอ (MM.SS หรือ HH.MM.SS)", placeholder="20.02", key="man_vpos")
+                    "ตำแหน่งในวิดีโอ (MM.SS หรือ HH.MM.SS)", placeholder="20.02",
+                    value=_default_vpos, key="man_vpos")
             manual_ref = None
             if man_clock and man_vpos:
                 vpos_m = re.match(r'^(\d{1,2})\.(\d{2})(?:\.(\d{2}))?$', man_vpos.strip())
@@ -1233,6 +1322,20 @@ with tab_yt:
                         unsafe_allow_html=True)
             else:
                 manual_ref = None
+
+        # ── clock check handler ────────────────────────────────
+        if check_btn and _url_for_check:
+            st.session_state["clock_checking"] = True
+            st.session_state["clock_check_result"] = None
+            _chk_tmp = tempfile.mkdtemp(prefix="pylive_chk_")
+            _chk_log = []
+            result = quick_clock_check(
+                _url_for_check, _chk_tmp,
+                _cfg.get("gemini_key1", ""),
+                log=_chk_log.append)
+            st.session_state["clock_check_result"] = result if result else "error"
+            st.session_state["clock_checking"] = False
+            st.rerun()
 
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         yt_run_btn = st.button(
