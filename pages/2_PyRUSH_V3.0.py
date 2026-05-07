@@ -308,7 +308,7 @@ def _output_exists(task_name, dst_f):
     """ตรวจว่า output ของ task นี้มีอยู่แล้วและไม่ใช่ 0-byte (ทั้ง video และ image)"""
     if not dst_f or not task_name: return False
     base = os.path.join(dst_f, sanitize_filename(task_name))
-    for ext in ('.mp4', '.jpg', '.jpeg', '.png', '.tif', '.tiff'):
+    for ext in ('.mp4', '.mov', '.m4v', '.avi', '.jpg', '.jpeg', '.png', '.tif', '.tiff'):
         p = base + ext
         if os.path.exists(p) and os.path.getsize(p) > 0: return True
     return False
@@ -847,22 +847,30 @@ if watchdog_on:
                     except Exception as e:
                         print(f"Warning: Image copy error: {e}")
                 else:
-                    out_p = os.path.join(dst_f, f"{safe_task_name}.mp4")
                     act = str(task.get('action','')).lower()
-                    if 'auto-5s' in act:
-                        success = run_ffmpeg_process(src_p, out_p, start=6.0)
-                    elif 'multi' in act:
-                        raw_starts = [s.strip() for s in str(task['start']).split(',')]
-                        raw_ends   = [e.strip() for e in str(task['end']).split(',')]
-                        success = run_ffmpeg_multi_trim(src_p, out_p,
-                            list(zip([parse_sheet_time(s) for s in raw_starts],
-                                     [parse_sheet_time(e) for e in raw_ends])))
-                    elif 'trim' in act:
-                        success = run_ffmpeg_process(src_p, out_p,
-                            start=parse_sheet_time(task['start']),
-                            end=parse_sheet_time(task['end']))
-                    elif 'none' in act:
-                        success = run_ffmpeg_process(src_p, out_p, is_none=True)
+                    if 'none' in act:
+                        # action=none — ไม่ตัด, copy ไฟล์เดิมพร้อม extension เดิม (รองรับ ProRes/.mov)
+                        out_p_none = os.path.join(dst_f, f"{safe_task_name}{src_ext}")
+                        try:
+                            shutil.copy2(src_p, out_p_none)
+                            success = os.path.exists(out_p_none) and os.path.getsize(out_p_none) > 0
+                        except Exception as e:
+                            st.session_state['_last_ffmpeg_err'] = f"[none-copy] {e} | input={src_p}"
+                            success = False
+                    else:
+                        out_p = os.path.join(dst_f, f"{safe_task_name}.mp4")
+                        if 'auto-5s' in act:
+                            success = run_ffmpeg_process(src_p, out_p, start=6.0)
+                        elif 'multi' in act:
+                            raw_starts = [s.strip() for s in str(task['start']).split(',')]
+                            raw_ends   = [e.strip() for e in str(task['end']).split(',')]
+                            success = run_ffmpeg_multi_trim(src_p, out_p,
+                                list(zip([parse_sheet_time(s) for s in raw_starts],
+                                         [parse_sheet_time(e) for e in raw_ends])))
+                        elif 'trim' in act:
+                            success = run_ffmpeg_process(src_p, out_p,
+                                start=parse_sheet_time(task['start']),
+                                end=parse_sheet_time(task['end']))
                 st.session_state.processing_id = None
                 if not success:
                     st.session_state.failed_tasks.add(task['id'])
