@@ -136,7 +136,11 @@ def run_ffmpeg_process(input_p, output_p, start=None, end=None, duration=None, i
         # copy โดยตรง ไม่ต้อง detect (ไม่มีการ re-encode)
         res = subprocess.run([FFMPEG_EXE, '-y', '-i', input_p, '-c', 'copy', output_p], capture_output=True)
         ok = res.returncode == 0 and os.path.exists(output_p) and os.path.getsize(output_p) > 1024
-        if not ok and os.path.exists(output_p): os.remove(output_p)  # ลบ 0-byte output
+        if not ok:
+            err_lines = res.stderr.decode('utf-8', errors='ignore').strip().splitlines()
+            tail = err_lines[-1] if err_lines else f"rc={res.returncode}"
+            st.session_state['_last_ffmpeg_err'] = f"[none] {tail} | input={input_p}"
+            if os.path.exists(output_p): os.remove(output_p)  # ลบ 0-byte output
         return ok
     cmd = [FFMPEG_EXE, '-y']
     start_sec = float(start) if start is not None else 0.0
@@ -149,6 +153,9 @@ def run_ffmpeg_process(input_p, output_p, start=None, end=None, duration=None, i
     cmd += ['-threads', '0', '-c:v', 'libx264', '-crf', '18', '-preset', 'ultrafast', '-c:a', 'aac', temp_out]
     res = subprocess.run(cmd, capture_output=True)
     if res.returncode != 0 or not os.path.exists(temp_out) or os.path.getsize(temp_out) <= 1024:
+        err_lines = res.stderr.decode('utf-8', errors='ignore').strip().splitlines()
+        tail = err_lines[-1] if err_lines else f"rc={res.returncode}"
+        st.session_state['_last_ffmpeg_err'] = f"[trim] {tail} | input={input_p}"
         if os.path.exists(temp_out): os.remove(temp_out)
         return False
     bads = get_bad_segments(temp_out)
@@ -860,8 +867,14 @@ if watchdog_on:
                 if sheet_id:
                     update_sheet_status_by_name(service, sheet_id, task['name'],
                         "✅ Done" if success else "❌ Error/Skipped")
-                if success: st.toast(f"✅ ตัดเสร็จ: {task['name']}")
-                else: st.toast(f"❌ ล้มเหลว: {task['name']}", icon="❌")
+                if success:
+                    st.toast(f"✅ ตัดเสร็จ: {task['name']}")
+                else:
+                    err_msg = st.session_state.pop('_last_ffmpeg_err', '')
+                    if err_msg:
+                        st.toast(f"❌ {task['name']}: {err_msg[:200]}", icon="❌")
+                    else:
+                        st.toast(f"❌ ล้มเหลว: {task['name']}", icon="❌")
                 # เสร็จแล้ว rerun ทันที
                 st.rerun()
     # ไม่มีงานที่ต้องตัด — poll ทุก 1 วินาที
