@@ -36,5 +36,10 @@ env/
 # --- PyLIVE cache (ไฟล์วิดีโอที่โหลดมา) ---
 pylive_cache/
 
+# --- Binary executables (ติดตั้งแยกต่างหาก) ---
+ffmpeg
+ffprobe
+ffplay
+
 # --- Claude Code ---
 .claude/
