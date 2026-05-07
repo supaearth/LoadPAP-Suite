@@ -1208,11 +1208,16 @@ with tab_yt:
                     "เวลาบนหน้าจอ (HH:MM:SS)", placeholder="14:35:22", key="man_clock")
             with mc2:
                 man_vpos = st.text_input(
-                    "ตำแหน่งในวิดีโอ (วินาที)", placeholder="125", key="man_vpos")
+                    "ตำแหน่งในวิดีโอ (MM.SS หรือ HH.MM.SS)", placeholder="20.02", key="man_vpos")
             manual_ref = None
             if man_clock and man_vpos:
-                if re.match(r'^\d{2}:\d{2}:\d{2}$', man_clock.strip()) and man_vpos.strip().isdigit():
-                    manual_ref = {"clock": man_clock.strip(), "video_pos": int(man_vpos.strip())}
+                vpos_m = re.match(r'^(\d{1,2})\.(\d{2})(?:\.(\d{2}))?$', man_vpos.strip())
+                if re.match(r'^\d{2}:\d{2}:\d{2}$', man_clock.strip()) and vpos_m:
+                    if vpos_m.group(3) is not None:
+                        vpos_sec = int(vpos_m.group(1))*3600 + int(vpos_m.group(2))*60 + int(vpos_m.group(3))
+                    else:
+                        vpos_sec = int(vpos_m.group(1))*60 + int(vpos_m.group(2))
+                    manual_ref = {"clock": man_clock.strip(), "video_pos": vpos_sec}
                     st.markdown(
                         '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
                         'color:#2dd4a8;margin-top:6px;">✅ Reference set</div>',
@@ -1220,7 +1225,7 @@ with tab_yt:
                 else:
                     st.markdown(
                         '<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
-                        'color:#ff4d4d;margin-top:6px;">⚠️ รูปแบบไม่ถูก — HH:MM:SS และตัวเลขจำนวนเต็ม</div>',
+                        'color:#ff4d4d;margin-top:6px;">⚠️ รูปแบบไม่ถูก — HH:MM:SS และ MM.SS / HH.MM.SS</div>',
                         unsafe_allow_html=True)
             else:
                 manual_ref = None
