@@ -9,6 +9,7 @@ import re
 import webbrowser
 import io
 import time
+import shutil
 import concurrent.futures
 from googleapiclient.http import MediaIoBaseDownload
 
@@ -33,6 +34,7 @@ from utils import (
 # 📍 0. ตั้งค่าตำแหน่ง FFmpeg
 # ==========================================
 FFMPEG_EXE = os.path.join(ROOT_DIR, "ffmpeg")
+IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
 
 def parse_sheet_time(t_str):
     t_str = str(t_str).strip()
@@ -78,6 +80,26 @@ def read_sheet_data(service, spreadsheet_id, range_name="Sheet1!A2:E"):
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
     return result.get('values', [])
+
+def read_sheet_data_with_links(service, spreadsheet_id):
+    """อ่าน Sheet1!A2:E พร้อม hyperlink ที่ซ่อนอยู่ใน column A (index 5)"""
+    rows = read_sheet_data(service, spreadsheet_id)
+    try:
+        cell_data = service.spreadsheets().get(
+            spreadsheetId=spreadsheet_id,
+            ranges=["Sheet1!A2:A"],
+            includeGridData=True,
+            fields="sheets.data.rowData.values.hyperlink"
+        ).execute()
+        hyperlinks = []
+        for sheet in cell_data.get('sheets', []):
+            for data_block in sheet.get('data', []):
+                for rowdata in data_block.get('rowData', []):
+                    vals = rowdata.get('values', [{}])
+                    hyperlinks.append(vals[0].get('hyperlink', '') if vals else '')
+    except Exception:
+        hyperlinks = [''] * len(rows)
+    return [row + [hyperlinks[i] if i < len(hyperlinks) else ''] for i, row in enumerate(rows)]
 
 def force_open_tab(url):
     try: subprocess.run(['open', '-a', 'Google Chrome', url], check=True, stderr=subprocess.DEVNULL)
@@ -222,15 +244,19 @@ def batch_scan_drive(all_ids, drive_service):
 def scan_file_location(video_id, src_f, arc_f, drive_service):
     search_id = str(video_id).lower().strip()
     if search_id.startswith(('rw', 'rc')): search_id = search_id[2:]
-    valid_exts = ('.mp4', '.mov', '.m4v', '.avi')
+    valid_exts = ('.mp4', '.mov', '.m4v', '.avi') + IMAGE_EXTS
     if src_f and os.path.exists(src_f):
         for f in os.listdir(src_f):
             if f.lower().endswith(valid_exts) and search_id in f.lower():
-                return "Source", os.path.join(src_f, f)
+                full_path = os.path.join(src_f, f)
+                if os.path.getsize(full_path) > 0:
+                    return "Source", full_path
     if arc_f and os.path.exists(arc_f):
         for f in os.listdir(arc_f):
             if f.lower().endswith(valid_exts) and search_id in f.lower():
-                return "Archive", os.path.join(arc_f, f)
+                full_path = os.path.join(arc_f, f)
+                if os.path.getsize(full_path) > 0:
+                    return "Archive", full_path
     if drive_service:
         result = batch_scan_drive([search_id], drive_service)
         if result:
@@ -238,29 +264,53 @@ def scan_file_location(video_id, src_f, arc_f, drive_service):
     return None, None
 
 def download_from_drive(drive_file_id, drive_file_name, dest_folder, drive_service):
+    file_path = os.path.join(dest_folder, sanitize_filename(drive_file_name))
+    # มีไฟล์สมบูรณ์อยู่แล้ว
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 1024:
+        return file_path
+    # ลบ 0-byte ที่ค้างจากการ download ที่ล้มเหลวก่อนหน้า
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    fh = None
     try:
-        file_path = os.path.join(dest_folder, sanitize_filename(drive_file_name))
-        if os.path.exists(file_path): return file_path
         request = drive_service.files().get_media(fileId=drive_file_id)
         fh = io.FileIO(file_path, 'wb')
         downloader = MediaIoBaseDownload(fh, request)
         done = False
         while not done: _, done = downloader.next_chunk()
-        return file_path
+        fh.close(); fh = None
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 1024:
+            return file_path
+        if os.path.exists(file_path): os.remove(file_path)
+        return None
     except Exception as e:
+        if fh:
+            try: fh.close()
+            except: pass
+        if os.path.exists(file_path): os.remove(file_path)
         print(f"Warning: Drive Download Error: {e}")
         return None
 
+def _output_exists(task_name, dst_f):
+    """ตรวจว่า output ของ task นี้มีอยู่แล้ว (ทั้ง video และ image)"""
+    if not dst_f or not task_name: return False
+    base = os.path.join(dst_f, sanitize_filename(task_name))
+    for ext in ('.mp4', '.jpg', '.jpeg', '.png', '.tif', '.tiff'):
+        if os.path.exists(base + ext): return True
+    return False
+
 def check_status(video_id, new_name=None):
+    # 0. error — เคย fail แล้ว
+    if video_id in st.session_state.get('failed_tasks', set()):
+        return "error"
     # 1. cutting ก่อนเสมอ
     proc = st.session_state.get('processing_id')
     if proc and str(video_id).strip().upper() == str(proc).strip().upper():
         return "cutting"
     # 2. done — ไฟล์ output มีอยู่แล้ว
     dst_f = st.session_state.get('dst_folder', '')
-    if dst_f and new_name:
-        if os.path.exists(os.path.join(dst_f, f"{sanitize_filename(new_name)}.mp4")):
-            return "done"
+    if _output_exists(new_name, dst_f):
+        return "done"
     # 3. ready — มีไฟล์ต้นทาง
     src_f = st.session_state.get('src_folder')
     arc_f = st.session_state.get('archive_folder')
@@ -324,6 +374,7 @@ st.markdown("""
 # ⚙️ SESSION STATE
 # ============================================================
 if 'processing_id' not in st.session_state: st.session_state.processing_id = None
+if 'failed_tasks' not in st.session_state: st.session_state.failed_tasks = set()
 app_config = load_config()
 for k, v in [
     ('archive_folder', app_config.get('archive_folder', '')),
@@ -382,6 +433,10 @@ with st.sidebar:
 
     st.divider()
     read_btn = st.button("🚀 เริ่มทำงาน", type="primary", use_container_width=True)
+    if st.session_state.get('failed_tasks'):
+        if st.button(f"🔄 Reset Errors ({len(st.session_state.failed_tasks)})", use_container_width=True):
+            st.session_state.failed_tasks = set()
+            st.rerun()
 
 # ============================================================
 # 🖥️ MAIN — HEADER
@@ -421,7 +476,7 @@ _tasks = st.session_state.get('all_tasks', [])
 _total = len(_tasks)
 _done_c  = sum(1 for t in _tasks if check_status(t['id'], t['name']) == 'done') if _tasks else 0
 _wait_c  = sum(1 for t in _tasks if check_status(t['id'], t['name']) == 'waiting') if _tasks else 0
-_err_c   = 0  # error = ไม่มีไฟล์และไม่ได้ทำงาน (waiting แต่ watchdog เคย process แล้ว)
+_err_c   = len(st.session_state.get('failed_tasks', set()))
 
 st.markdown(
     f'<div class="lad-stat-row">'
@@ -443,13 +498,16 @@ if read_btn and sheet_url:
         try:
             service = get_sheets_service()
             drive_service = get_drive_service()
-            rows = read_sheet_data(service, extract_id(sheet_url))
+            rows = read_sheet_data_with_links(service, extract_id(sheet_url))
             all_tasks = []; r_u = set(); g_u = set()
             for row in rows:
                 if len(row) < 3: continue
                 vid, name, act = row[0].strip(), row[1].strip(), row[2].strip()
+                hyperlink = row[5] if len(row) > 5 else ''
+                drive_link_id = extract_id(hyperlink) if hyperlink and 'drive.google.com' in hyperlink else ''
                 all_tasks.append({"id": vid, "name": name, "action": act,
-                    "start": row[3] if len(row)>3 else "", "end": row[4] if len(row)>4 else ""})
+                    "start": row[3] if len(row)>3 else "", "end": row[4] if len(row)>4 else "",
+                    "drive_link_id": drive_link_id})
                 if vid.lower().startswith(('rw','rc')) or vid.lower().endswith('rp1'): r_u.add(vid)
                 else: g_u.add(vid)
             st.session_state.all_tasks = all_tasks
@@ -457,8 +515,10 @@ if read_btn and sheet_url:
             arc_f = st.session_state.get('archive_folder')
             st.session_state.found_files = {}
             g_miss=[]; g_found=[]; r_miss=[]; r_found=[]
-            valid_exts = ('.mp4','.mov','.m4v','.avi')
+            valid_exts = ('.mp4','.mov','.m4v','.avi') + IMAGE_EXTS
             all_ids = sorted(list(g_u)) + sorted(list(r_u))
+            # build drive_link_id lookup: vid → drive_link_id
+            drive_link_map = {t['id']: t['drive_link_id'] for t in all_tasks if t.get('drive_link_id')}
             local_found = {}; ids_need_drive = []
             for vid in all_ids:
                 search_id = vid.lower().strip()
@@ -468,10 +528,25 @@ if read_btn and sheet_url:
                     if folder and os.path.exists(folder):
                         for f in os.listdir(folder):
                             if f.lower().endswith(valid_exts) and search_id in f.lower():
-                                local_found[vid] = ("Source" if folder==src_f else "Archive", os.path.join(folder, f))
-                                found_local = True; break
+                                full_path = os.path.join(folder, f)
+                                if os.path.getsize(full_path) > 0:
+                                    local_found[vid] = ("Source" if folder==src_f else "Archive", full_path)
+                                    found_local = True; break
                     if found_local: break
-                if not found_local: ids_need_drive.append(vid)
+                if not found_local:
+                    if drive_link_map.get(vid):
+                        # มี hyperlink โดยตรง — ดึง metadata จาก file ID แทนการค้นชื่อ
+                        try:
+                            fmeta = drive_service.files().get(
+                                fileId=drive_link_map[vid],
+                                fields="id,name,webViewLink",
+                                supportsAllDrives=True
+                            ).execute()
+                            local_found[vid] = ("Drive", fmeta)
+                        except Exception:
+                            ids_need_drive.append(vid)
+                    else:
+                        ids_need_drive.append(vid)
             drive_found = batch_scan_drive(ids_need_drive, drive_service) if ids_need_drive else {}
             for vid in sorted(list(g_u)):
                 if vid in local_found: loc,path=local_found[vid]; g_found.append((vid,loc)); st.session_state.found_files[vid]=(loc,path)
@@ -481,6 +556,8 @@ if read_btn and sheet_url:
                 if vid in local_found: loc,path=local_found[vid]; r_found.append((vid,loc)); st.session_state.found_files[vid]=(loc,path)
                 elif vid in drive_found: r_found.append((vid,"Drive")); st.session_state.found_files[vid]=("Drive",drive_found[vid])
                 else: r_miss.append(vid)
+            # รีเซ็ต failed_tasks เมื่อโหลด job ใหม่
+            st.session_state.failed_tasks = set()
             st.session_state.getty_missing=g_miss; st.session_state.getty_found=g_found
             st.session_state.reuters_missing=r_miss; st.session_state.reuters_found=r_found
             st.success("✅ โหลดข้อมูลเรียบร้อย!")
@@ -513,6 +590,7 @@ st.markdown("""
 .b-cut {background:rgba(74,158,255,.15);color:#4a9eff;border:1px solid rgba(74,158,255,.35);}
 .b-rdy {background:rgba(255,209,102,.12);color:#ffd166;border:1px solid rgba(255,209,102,.3);}
 .b-wait{background:rgba(255,77,77,.08);color:#ff6b6b;border:1px solid rgba(255,77,77,.2);}
+.b-err {background:rgba(255,77,77,.15);color:#ff4d4d;border:1px solid rgba(255,77,77,.35);}
 </style>
 """, unsafe_allow_html=True)
 
@@ -646,6 +724,9 @@ if 'all_tasks' in st.session_state:
         elif stat == "ready":
             badge = '<span class="lad-b b-rdy">🟡 Ready</span>'
             cls = ""
+        elif stat == "error":
+            badge = '<span class="lad-b b-err">❌ Error</span>'
+            cls = ""
         else:
             badge = '<span class="lad-b b-wait">🔴 Waiting</span>'
             cls = ""
@@ -705,26 +786,53 @@ if watchdog_on:
 
     if src_f and dst_f and 'all_tasks' in st.session_state:
         for idx, task in enumerate(st.session_state.all_tasks):
+            # ข้าม task ที่เคย fail แล้ว
+            if task['id'] in st.session_state.get('failed_tasks', set()):
+                continue
             safe_task_name = sanitize_filename(task['name'])
-            out_p = os.path.join(dst_f, f"{safe_task_name}.mp4")
-            if not os.path.exists(out_p):
+            if _output_exists(task['name'], dst_f):
+                continue
+            # ค้นหาไฟล์ต้นทาง — ถ้ามี drive_link_id ใช้โดยตรง ไม่ต้องค้นชื่อ
+            drive_link_id = task.get('drive_link_id', '')
+            if drive_link_id:
+                try:
+                    fmeta = drive_service.files().get(
+                        fileId=drive_link_id,
+                        fields="id,name,webViewLink",
+                        supportsAllDrives=True
+                    ).execute()
+                    loc, path_info = "Drive", fmeta
+                except Exception:
+                    loc, path_info = scan_file_location(task['id'], src_f, arc_f, drive_service)
+            else:
                 loc, path_info = scan_file_location(task['id'], src_f, arc_f, drive_service)
-                src_p = None
-                if loc == "Drive":
-                    if sheet_id: update_sheet_status_by_name(service, sheet_id, task['name'], "☁️ Downloading...")
-                    src_p = download_from_drive(path_info['id'], path_info['name'], src_f, drive_service)
-                elif loc in ["Source", "Archive"]:
-                    src_p = path_info
-                if src_p:
-                    # rerun ครั้งแรก — แสดง cutting ก่อน FFmpeg เริ่ม
-                    if st.session_state.processing_id != task['id']:
-                        st.session_state.processing_id = task['id']
-                        if sheet_id: update_sheet_status_by_name(service, sheet_id, task['name'], "⏳ Processing...")
-                        st.rerun()
+            src_p = None
+            if loc == "Drive":
+                if sheet_id: update_sheet_status_by_name(service, sheet_id, task['name'], "☁️ Downloading...")
+                src_p = download_from_drive(path_info['id'], path_info['name'], src_f, drive_service)
+            elif loc in ["Source", "Archive"]:
+                src_p = path_info
+            if src_p:
+                # rerun ครั้งแรก — แสดง cutting ก่อน FFmpeg เริ่ม
+                if st.session_state.processing_id != task['id']:
+                    st.session_state.processing_id = task['id']
+                    if sheet_id: update_sheet_status_by_name(service, sheet_id, task['name'], "⏳ Processing...")
+                    st.rerun()
 
-                    # rerun ครั้งสอง — ถึงตรงนี้แปลว่า processing_id ถูก set แล้ว ลงมือตัดได้เลย
+                # rerun ครั้งสอง — ถึงตรงนี้แปลว่า processing_id ถูก set แล้ว ลงมือตัดได้เลย
+                src_ext = os.path.splitext(src_p)[1].lower()
+                success = False
+                if src_ext in IMAGE_EXTS:
+                    # ไฟล์รูปภาพ — copy + rename ไม่ผ่าน FFmpeg
+                    out_p_img = os.path.join(dst_f, f"{safe_task_name}{src_ext}")
+                    try:
+                        shutil.copy2(src_p, out_p_img)
+                        success = os.path.exists(out_p_img) and os.path.getsize(out_p_img) > 0
+                    except Exception as e:
+                        print(f"Warning: Image copy error: {e}")
+                else:
+                    out_p = os.path.join(dst_f, f"{safe_task_name}.mp4")
                     act = str(task.get('action','')).lower()
-                    success = False
                     if 'auto-5s' in act:
                         success = run_ffmpeg_process(src_p, out_p, start=6.0)
                     elif 'multi' in act:
@@ -739,13 +847,16 @@ if watchdog_on:
                             end=parse_sheet_time(task['end']))
                     elif 'none' in act:
                         success = run_ffmpeg_process(src_p, out_p, is_none=True)
-                    st.session_state.processing_id = None
-                    if sheet_id:
-                        update_sheet_status_by_name(service, sheet_id, task['name'],
-                            "✅ Done" if success else "❌ Error/Skipped")
-                    if success: st.toast(f"✅ ตัดเสร็จ: {task['name']}")
-                    # ตัดเสร็จแล้ว rerun ทันที ไม่ต้อง sleep
-                    st.rerun()
+                st.session_state.processing_id = None
+                if not success:
+                    st.session_state.failed_tasks.add(task['id'])
+                if sheet_id:
+                    update_sheet_status_by_name(service, sheet_id, task['name'],
+                        "✅ Done" if success else "❌ Error/Skipped")
+                if success: st.toast(f"✅ ตัดเสร็จ: {task['name']}")
+                else: st.toast(f"❌ ล้มเหลว: {task['name']}", icon="❌")
+                # เสร็จแล้ว rerun ทันที
+                st.rerun()
     # ไม่มีงานที่ต้องตัด — poll ทุก 1 วินาที
     time.sleep(1)
     st.rerun()
