@@ -39,5 +39,9 @@ pylive_cache/
 # --- START.command (สร้างโดย setup.py ด้วย path เฉพาะเครื่อง) ---
 START.command
 
+# --- Binary executables (system-installed) ---
+ffprobe
+ffplay
+
 # --- Claude Code ---
 .claude/
