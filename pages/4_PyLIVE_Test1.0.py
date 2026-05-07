@@ -141,7 +141,12 @@ def _get_ffmpeg_exe() -> Optional[str]:
         "/usr/local/bin/ffmpeg",
     ]:
         if candidate and os.path.exists(candidate):
-            return candidate
+            try:
+                subprocess.run([candidate, "-version"],
+                               capture_output=True, timeout=5)
+                return candidate
+            except (OSError, subprocess.TimeoutExpired):
+                continue  # binary ไม่รองรับ CPU นี้ → ลอง candidate ถัดไป
     return None
 
 def probe_video(path: str) -> dict:
