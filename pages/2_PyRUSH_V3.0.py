@@ -503,6 +503,7 @@ if read_btn and sheet_url:
             for row in rows:
                 if len(row) < 3: continue
                 vid, name, act = row[0].strip(), row[1].strip(), row[2].strip()
+                if not vid or not name: continue  # ข้ามแถวว่าง
                 hyperlink = row[5] if len(row) > 5 else ''
                 drive_link_id = extract_id(hyperlink) if hyperlink and 'drive.google.com' in hyperlink else ''
                 all_tasks.append({"id": vid, "name": name, "action": act,
