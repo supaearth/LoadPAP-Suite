@@ -286,9 +286,11 @@ def download_from_drive(drive_file_id, drive_file_name, dest_folder, drive_servi
     try:
         request = drive_service.files().get_media(fileId=drive_file_id)
         fh = io.FileIO(file_path, 'wb')
-        downloader = MediaIoBaseDownload(fh, request)
+        # chunk 256MB + retry 5 ครั้งต่อ chunk รองรับไฟล์ใหญ่
+        downloader = MediaIoBaseDownload(fh, request, chunksize=256*1024*1024)
         done = False
-        while not done: _, done = downloader.next_chunk()
+        while not done:
+            _, done = downloader.next_chunk(num_retries=5)
         fh.close(); fh = None
         if os.path.exists(file_path) and os.path.getsize(file_path) > 1024:
             return file_path
