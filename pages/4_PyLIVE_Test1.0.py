@@ -131,22 +131,30 @@ def _ffp() -> str:
     raise RuntimeError("ไม่พบ ffprobe — ติดตั้ง ffmpeg (รวม ffprobe)")
 
 def _get_ffmpeg_exe() -> Optional[str]:
+    import platform
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir  = os.path.dirname(current_dir)
-    for candidate in [
+    arch = platform.machine()  # 'arm64' | 'x86_64'
+    candidates = [
+        # arch-specific binary ในโปรเจค (arm64 / x86_64)
+        os.path.join(parent_dir, f"ffmpeg_{arch}"),
+        os.path.join(current_dir, f"ffmpeg_{arch}"),
+        # universal / generic ในโปรเจค
         os.path.join(parent_dir, "ffmpeg"),
         os.path.join(current_dir, "ffmpeg"),
+        # system-wide
         shutil.which("ffmpeg"),
         "/opt/homebrew/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
-    ]:
+    ]
+    for candidate in candidates:
         if candidate and os.path.exists(candidate):
             try:
                 subprocess.run([candidate, "-version"],
                                capture_output=True, timeout=5)
                 return candidate
             except (OSError, subprocess.TimeoutExpired):
-                continue  # binary ไม่รองรับ CPU นี้ → ลอง candidate ถัดไป
+                continue
     return None
 
 def probe_video(path: str) -> dict:
