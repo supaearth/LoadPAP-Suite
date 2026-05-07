@@ -204,11 +204,25 @@ def parse_brief(text: str) -> Optional[LiveBrief]:
     caption_m = re.search(
         r'แคปชั่น\s*:\s*(.+?)(?=\n\s*\n|\nTC|\nลิงค์|$)', text, re.DOTALL)
 
+    # TC pattern: HH.MM.SS (1-2 digit hour) label - HH.MM.SS label
+    _TC_RE = re.compile(
+        r'(\d{1,2}\.\d{2}\.\d{2})'   # start TC
+        r'\s*(.*?)'                    # start label (optional)
+        r'\s*-\s*'
+        r'(\d{1,2}\.\d{2}\.\d{2})'   # end TC
+        r'\s*(.*)$'                    # end label (optional)
+    )
     segments = []
     for line in text.splitlines():
-        m = re.match(
-            r'TC.*?:\s*(\d{2}\.\d{2}\.\d{2})\s*(.*?)\s*-\s*(\d{2}\.\d{2}\.\d{2})\s*(.*)$',
-            line.strip())
+        stripped = line.strip()
+        # รองรับ 2 format:
+        # 1. "TC ...: HH.MM.SS label - HH.MM.SS label"  (TC: นำหน้า)
+        # 2. "HH.MM.SS label - HH.MM.SS label"           (timecode ล้วน)
+        search_in = stripped
+        if re.match(r'TC.*?:', stripped, re.IGNORECASE):
+            # ตัด prefix "TC...:" ออกก่อนแล้วค่อย match
+            search_in = re.sub(r'^TC.*?:\s*', '', stripped, flags=re.IGNORECASE)
+        m = _TC_RE.match(search_in)
         if m:
             start_label = m.group(2).strip() or "clip"
             end_label   = m.group(4).strip() or start_label
@@ -1137,12 +1151,13 @@ with tab_yt:
         brief_text = st.text_area(
             "Brief", label_visibility="collapsed", height=220,
             placeholder=(
-                "//\n"
                 "ปก : ชื่อเรื่อง\n"
-                "แคปชั่น : ...\n\n"
-                "TC (เวลามุมขวาของจอ) :\n"
-                "21.08.12 วันที่ 1 ม.ค. - 21.10.24 เท่านั้นเอง\n\n"
-                "ลิงค์ถ่ายทอดสด : https://www.youtube.com/live/..."
+                "แคปชัน : ...\n\n"
+                "https://www.youtube.com/watch?v=...\n\n"
+                "TC: 21.08.12 label - 21.10.24 label\n"
+                "TC: 21.15.00 - 21.16.30\n\n"
+                "หรือ timecode ล้วน:\n"
+                "21.08.12 - 21.10.24"
             ), key="brief_ta",
         )
 
