@@ -1381,6 +1381,12 @@ with tab_yt:
 
         def _yt_log(msg):
             st.session_state["live_log"].append(f"[{time.strftime('%H:%M:%S')}]  {msg}")
+            lines = st.session_state["live_log"][-60:]
+            with yt_log_box.container():
+                st.markdown('<div class="sl-lbl" style="margin-top:20px;">LOG</div>',
+                            unsafe_allow_html=True)
+                st.markdown('<div class="lg">' + "<br>".join(lines) + '</div>',
+                            unsafe_allow_html=True)
 
         try:
             _prog(yt_prog_box, "วิเคราะห์ stream + Calibrate...", "📡", pct=0.10)
@@ -1599,6 +1605,12 @@ with tab_rec:
 
         def _rec_log(msg):
             st.session_state["rec_log"].append(f"[{time.strftime('%H:%M:%S')}]  {msg}")
+            lines = st.session_state["rec_log"][-60:]
+            with rec_log_box.container():
+                st.markdown('<div class="sl-lbl" style="margin-top:20px;">LOG</div>',
+                            unsafe_allow_html=True)
+                st.markdown('<div class="lg">' + "<br>".join(lines) + '</div>',
+                            unsafe_allow_html=True)
 
         try:
             _prog(rec_prog_box, "กำลัง download + ตัดวิดีโอ...", "⬇️", pct=0.10)
