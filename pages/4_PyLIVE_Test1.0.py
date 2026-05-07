@@ -863,7 +863,7 @@ def _ffmpeg_cut(src: str, start_sec: int, end_sec: int, out: str) -> bool:
         capture_output=True)
     return r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 10*1024
 
-_VIDEO_CACHE_DIR = os.path.join(_ROOT, ".pylive_cache")
+_VIDEO_CACHE_DIR = os.path.join(_ROOT, "pylive_cache")
 
 def _cleanup_cache(days: int = 3) -> None:
     """ลบไฟล์ cache ที่เก่ากว่า `days` วัน"""
