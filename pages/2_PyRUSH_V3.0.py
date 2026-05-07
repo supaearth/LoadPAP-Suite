@@ -135,7 +135,9 @@ def run_ffmpeg_process(input_p, output_p, start=None, end=None, duration=None, i
     if is_none:
         # copy โดยตรง ไม่ต้อง detect (ไม่มีการ re-encode)
         res = subprocess.run([FFMPEG_EXE, '-y', '-i', input_p, '-c', 'copy', output_p], capture_output=True)
-        return res.returncode == 0 and os.path.exists(output_p) and os.path.getsize(output_p) > 1024
+        ok = res.returncode == 0 and os.path.exists(output_p) and os.path.getsize(output_p) > 1024
+        if not ok and os.path.exists(output_p): os.remove(output_p)  # ลบ 0-byte output
+        return ok
     cmd = [FFMPEG_EXE, '-y']
     start_sec = float(start) if start is not None else 0.0
     if start_sec > 0: cmd += ['-ss', str(start_sec)]
@@ -292,11 +294,12 @@ def download_from_drive(drive_file_id, drive_file_name, dest_folder, drive_servi
         return None
 
 def _output_exists(task_name, dst_f):
-    """ตรวจว่า output ของ task นี้มีอยู่แล้ว (ทั้ง video และ image)"""
+    """ตรวจว่า output ของ task นี้มีอยู่แล้วและไม่ใช่ 0-byte (ทั้ง video และ image)"""
     if not dst_f or not task_name: return False
     base = os.path.join(dst_f, sanitize_filename(task_name))
     for ext in ('.mp4', '.jpg', '.jpeg', '.png', '.tif', '.tiff'):
-        if os.path.exists(base + ext): return True
+        p = base + ext
+        if os.path.exists(p) and os.path.getsize(p) > 0: return True
     return False
 
 def check_status(video_id, new_name=None):
