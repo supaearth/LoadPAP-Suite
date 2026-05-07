@@ -576,12 +576,19 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
         res["need_manual"] = True
         return res
 
+    ss = calib.stream_start_sec
+    log(f"  🕐 stream_start = {ss//3600:02d}:{(ss%3600)//60:02d}:{ss%60:02d}  "
+        f"(method: {calib.method_used})")
+
     timestamps = compute_timestamps(brief.segments, calib)
     if not timestamps:
         res["error"] = "ไม่มี segment — ตรวจ TC format: HH.MM.SS label - HH.MM.SS"
         return res
     for i, ts in enumerate(timestamps, 1):
-        log(f"  📐 SEG {i}: [{ts['video_start']:.0f}s → {ts['video_end']:.0f}s]")
+        vs, ve = ts['video_start'], ts['video_end']
+        vm, vs2 = int(vs)//60, int(vs)%60
+        log(f"  📐 SEG {i}: TC {ts['start_clock']} → {ts['end_clock']}  "
+            f"= วิดีโอ {vm:02d}:{vs2:02d} ({vs:.0f}s → {ve:.0f}s)")
 
     seg_paths = []
     for i, ts in enumerate(timestamps, 1):
