@@ -36,9 +36,7 @@ env/
 # --- PyLIVE cache (ไฟล์วิดีโอที่โหลดมา) ---
 pylive_cache/
 
-# --- Binary executables ชื่อเปลือย (ไม่ track — อาจเป็น Intel-only) ---
-# ใช้ ffmpeg_arm64 / ffmpeg_x86_64 แทน
-ffmpeg
+# --- Binary executables (system-installed) ---
 ffprobe
 ffplay
 
