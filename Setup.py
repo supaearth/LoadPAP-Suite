@@ -95,10 +95,11 @@ def check_credentials():
     if os.path.exists(CREDS_FILE):
         ok("พบ credentials.json")
     else:
-        warn("ไม่พบ credentials.json")
-        warn("วาง credentials.json (รับจากผู้ดูแลโปรแกรม) ลงในโฟลเดอร์นี้ก่อนเปิดใช้งาน")
-        warn(f"  → {PROJECT_DIR}")
-        # ไม่ exit — ให้ setup ต่อได้ก่อน user จะใส่ทีหลังก็ได้
+        err("ไม่พบ credentials.json")
+        err("วาง credentials.json (รับจากผู้ดูแลโปรแกรม) ลงในโฟลเดอร์นี้ก่อน:")
+        err(f"  → {PROJECT_DIR}")
+        err("แล้วรัน python3 setup.py ใหม่อีกครั้ง")
+        sys.exit(1)
 
 # ──────────────────────────────────────────
 # Step 3 — สร้าง vmaster_config.json
@@ -222,13 +223,35 @@ if [ ! -f "$PROJECT_DIR/credentials.json" ]; then
     exit 1
 fi
 
+# ─── เช็ค venv ───
+if [ ! -f "$STREAMLIT" ]; then
+    echo "❌ ไม่พบ Streamlit — venv อาจติดตั้งไม่สมบูรณ์"
+    echo "   กรุณารัน: python3 setup.py"
+    echo ""
+    echo "กด Enter เพื่อปิด..."
+    read
+    exit 1
+fi
+
+# ─── เช็ค port 8501 ───
+if lsof -ti:8501 &>/dev/null; then
+    echo "⚠️  LoadPAP เปิดอยู่แล้ว — เปิด browser ไปที่หน้าเดิม"
+    open "http://localhost:8501"
+    exit 0
+fi
+
 # ─── รัน Streamlit ───
 echo "🚀 กำลังเปิด LoadPAP..."
 "$STREAMLIT" run "$MAIN_PY" --server.headless true --server.port 8501 &
 STREAMLIT_PID=$!
 
-# รอให้ Streamlit พร้อม
-sleep 3
+# รอจนพร้อม (max 15 วิ)
+for i in $(seq 1 15); do
+    sleep 1
+    if lsof -ti:8501 &>/dev/null; then
+        break
+    fi
+done
 
 # เปิด Chrome
 open "http://localhost:8501"
