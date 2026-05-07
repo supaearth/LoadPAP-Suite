@@ -390,14 +390,20 @@ def _find_clock_appearance(probe_clip: str, tmp_dir: str,
     )
 
 def _ocr_calibrate(probe_clip: str, t_found: float, clock_found: str,
-                   tmp_dir: str, api_key: str, log=None) -> CalibResult:
+                   tmp_dir: str, api_key: str, log=None,
+                   video_offset: int = 0) -> CalibResult:
+    """
+    คำนวณ stream_start จาก OCR
+    video_offset: จำนวนวินาทีที่ probe clip เริ่มจาก (ถ้าไม่ได้ดึงจากต้นไฟล์)
+    stream_start = clock_at_T - (video_offset + T)
+    """
     def _info(msg):
         if log: log(msg)
     dur = get_duration(probe_clip)
     wall_sec_0 = hhmm_to_sec(clock_found)
-    est_0 = wall_sec_0 - int(t_found)
+    est_0 = wall_sec_0 - (video_offset + int(t_found))
     estimates = [est_0]
-    _info(f"  📐 T={t_found:.0f}s → {clock_found} → start estimate = "
+    _info(f"  📐 T={video_offset+t_found:.0f}s (abs) → {clock_found} → start estimate = "
           f"{est_0//3600:02d}:{(est_0%3600)//60:02d}:{est_0%60:02d}")
     for t in [t_found + 15, t_found + 30]:
         if t >= dur - 1:
@@ -405,9 +411,9 @@ def _ocr_calibrate(probe_clip: str, t_found: float, clock_found: str,
         clock = _try_ocr_at(probe_clip, t, tmp_dir, api_key, "calib")
         if clock:
             wall_sec = hhmm_to_sec(clock)
-            est = wall_sec - int(t)
+            est = wall_sec - (video_offset + int(t))
             estimates.append(est)
-            _info(f"  📐 T={t:.0f}s → {clock} → start estimate = "
+            _info(f"  📐 T={video_offset+t:.0f}s (abs) → {clock} → start estimate = "
                   f"{est//3600:02d}:{(est%3600)//60:02d}:{est%60:02d}")
         else:
             _info(f"  ⚠️  T={t:.0f}s — OCR ล้มเหลว — ข้าม")
@@ -433,26 +439,41 @@ def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
         _info(f"  ✋ Manual calibration → stream_start = {h:02d}:{m:02d}:{s:02d}")
         return CalibResult(stream_start_sec=stream_start, confidence=1.0, method_used="manual")
 
-    _info("  🔍 โหลด Probe Clip (90 วิ / 360p)...")
-    probe = _download_probe_clip(stream_info.url, tmp_dir)
-    if not probe:
-        raise NoClock("โหลด Probe Clip ล้มเหลว")
-    _info("  🔍 Adaptive Clock Scan...")
-    t_found, clock_found = _find_clock_appearance(probe, tmp_dir, api_key, log)
-    return _ocr_calibrate(probe, t_found, clock_found, tmp_dir, api_key, log)
+    # scan ทีละ 10 นาที จนเจอนาฬิกา (รองรับ pre-live ยาว)
+    for skip_min in [0, 10, 20, 30, 45, 60]:
+        skip_sec = skip_min * 60
+        _info(f"  🔍 โหลด Probe Clip @ {skip_min} นาที...")
+        probe = _download_probe_clip(stream_info.url, tmp_dir, start_sec=skip_sec)
+        if not probe:
+            _info(f"  ⚠️  โหลดล้มเหลว @ {skip_min} นาที — ข้าม")
+            continue
+        try:
+            t_found, clock_found = _find_clock_appearance(probe, tmp_dir, api_key, log)
+            # t_found วัดจากต้น probe clip → แปลงเป็น position จริงในวิดีโอ
+            t_absolute = skip_sec + t_found
+            _info(f"  ✅ พบนาฬิกา @ {skip_min} นาที + {t_found:.0f}s (absolute {t_absolute:.0f}s)")
+            return _ocr_calibrate(probe, t_found, clock_found, tmp_dir, api_key, log,
+                                  video_offset=skip_sec)
+        except NoClock:
+            _info(f"  ⬜ ไม่พบนาฬิกาใน {skip_min} นาที — ลองถัดไป")
+            continue
+    raise NoClock("ไม่พบนาฬิกาในช่วง 0–60 นาที\nกรุณากด '📸 เช็คนาฬิกาตอนนี้' หรือกรอก Manual Calibration")
 
 # ============================================================
 # 7.  MODULE 5 — YOUTUBE DOWNLOADER
 # ============================================================
-def _download_probe_clip(url: str, out_dir: str) -> Optional[str]:
+def _download_probe_clip(url: str, out_dir: str, start_sec: int = 0) -> Optional[str]:
+    """ดึง probe clip ขนาด PROBE_DURATION วิ เริ่มจาก start_sec"""
     ffmpeg_exe = _get_ffmpeg_exe()
-    out = os.path.join(out_dir, "probe_clip.mp4")
+    tag = f"probe_{start_sec}"
+    out = os.path.join(out_dir, f"{tag}.mp4")
     opts = {
         'format': ('bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]'
                    '/bestvideo[height<=480]+bestaudio/worst'),
         'merge_output_format': 'mp4',
         'outtmpl': out.replace('.mp4', '.%(ext)s'),
-        'download_ranges': yt_dlp.utils.download_range_func(None, [(0, PROBE_DURATION)]),
+        'download_ranges': yt_dlp.utils.download_range_func(
+            None, [(start_sec, start_sec + PROBE_DURATION)]),
         'force_keyframes_at_cuts': True,
         'quiet': True, 'no_warnings': True, 'noplaylist': True,
         'ffmpeg_location': ffmpeg_exe,
@@ -460,15 +481,15 @@ def _download_probe_clip(url: str, out_dir: str) -> Optional[str]:
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
-        for f in Path(out_dir).glob("probe_clip.*"):
-            if get_duration(str(f)) >= 25:
+        for f in Path(out_dir).glob(f"{tag}.*"):
+            if get_duration(str(f)) >= 10:
                 return str(f)
             os.remove(str(f))
             break
         opts['format'] = 'best[height<=480]/best'
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
-        for f in Path(out_dir).glob("probe_clip.*"):
+        for f in Path(out_dir).glob(f"{tag}.*"):
             return str(f)
         return None
     except:
