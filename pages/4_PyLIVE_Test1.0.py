@@ -427,7 +427,8 @@ def _ocr_calibrate(probe_clip: str, t_found: float, clock_found: str,
     return CalibResult(stream_start_sec=stream_start, confidence=confidence, method_used="ocr")
 
 def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
-              manual_ref: Optional[dict] = None, log=None) -> CalibResult:
+              manual_ref: Optional[dict] = None, log=None,
+              stream_url: str = "", dvr_dur: int = 0) -> CalibResult:
     def _info(msg):
         if log: log(msg)
 
@@ -439,17 +440,28 @@ def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
         _info(f"  ✋ Manual calibration → stream_start = {h:02d}:{m:02d}:{s:02d}")
         return CalibResult(stream_start_sec=stream_start, confidence=1.0, method_used="manual")
 
+    # ดึง stream URL ก่อน probe (ถ้ายังไม่มี)
+    if not stream_url:
+        _info("  🔗 ดึง stream URL...")
+        stream_url, dvr_dur = _get_stream_url_and_dvr(stream_info.url)
+        if not stream_url:
+            raise NoClock("ดึง stream URL ล้มเหลว — ตรวจสอบการเชื่อมต่อ")
+    if dvr_dur:
+        _info(f"  📏 DVR ≈ {dvr_dur//60} นาที")
+
     # scan ทีละ 10 นาที จนเจอนาฬิกา (รองรับ pre-live ยาว)
     for skip_min in [0, 10, 20, 30, 45, 60]:
         skip_sec = skip_min * 60
-        _info(f"  🔍 โหลด Probe Clip @ {skip_min} นาที...")
-        probe = _download_probe_clip(stream_info.url, tmp_dir, start_sec=skip_sec)
+        if dvr_dur and skip_sec >= dvr_dur:
+            _info(f"  ⬜ {skip_min} นาที เกิน DVR — หยุด")
+            break
+        _info(f"  🔍 Probe @ {skip_min} นาที...")
+        probe = _download_probe_clip(stream_url, tmp_dir, start_sec=skip_sec)
         if not probe:
             _info(f"  ⚠️  โหลดล้มเหลว @ {skip_min} นาที — ข้าม")
             continue
         try:
             t_found, clock_found = _find_clock_appearance(probe, tmp_dir, api_key, log)
-            # t_found วัดจากต้น probe clip → แปลงเป็น position จริงในวิดีโอ
             t_absolute = skip_sec + t_found
             _info(f"  ✅ พบนาฬิกา @ {skip_min} นาที + {t_found:.0f}s (absolute {t_absolute:.0f}s)")
             return _ocr_calibrate(probe, t_found, clock_found, tmp_dir, api_key, log,
@@ -462,57 +474,43 @@ def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
 # ============================================================
 # 7.  MODULE 5 — YOUTUBE DOWNLOADER
 # ============================================================
-def _download_probe_clip(url: str, out_dir: str, start_sec: int = 0) -> Optional[str]:
-    """ดึง probe clip ขนาด PROBE_DURATION วิ เริ่มจาก start_sec"""
+def _download_probe_clip(stream_url: str, out_dir: str, start_sec: int = 0) -> Optional[str]:
+    """ดึง PROBE_DURATION วิ จาก DVR position start_sec ด้วย FFmpeg seek"""
     ffmpeg_exe = _get_ffmpeg_exe()
+    if not ffmpeg_exe or not stream_url:
+        return None
     tag = f"probe_{start_sec}"
     out = os.path.join(out_dir, f"{tag}.mp4")
-    opts = {
-        'format': ('bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]'
-                   '/bestvideo[height<=480]+bestaudio/worst'),
-        'merge_output_format': 'mp4',
-        'outtmpl': out.replace('.mp4', '.%(ext)s'),
-        'download_ranges': yt_dlp.utils.download_range_func(
-            None, [(start_sec, start_sec + PROBE_DURATION)]),
-        'force_keyframes_at_cuts': True,
-        'quiet': True, 'no_warnings': True, 'noplaylist': True,
-        'ffmpeg_location': ffmpeg_exe,
-    }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-        for f in Path(out_dir).glob(f"{tag}.*"):
-            if get_duration(str(f)) >= 3:
-                return str(f)
-            os.remove(str(f))
-            break
-        opts['format'] = 'best[height<=480]/best'
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-        for f in Path(out_dir).glob(f"{tag}.*"):
-            return str(f)
-        return None
-    except:
-        return None
+    r = subprocess.run(
+        [ffmpeg_exe, "-y",
+         "-ss", str(start_sec),
+         "-i", stream_url,
+         "-t", str(PROBE_DURATION),
+         "-c", "copy", "-movflags", "+faststart", out],
+        capture_output=True, timeout=90)
+    if r.returncode == 0 and os.path.exists(out) and get_duration(out) >= 3:
+        return out
+    return None
 
-def _grab_live_tail(url: str, out_dir: str) -> Optional[str]:
-    """ดึงวิดีโอ ~15 วิจาก live head (ใช้ FFmpeg -t ตัดจาก stream โดยตรง)"""
-    ffmpeg_exe = _get_ffmpeg_exe()
-    if not ffmpeg_exe:
-        return None
-    out = os.path.join(out_dir, "live_tail.mp4")
-    # ดึง stream URL ก่อนด้วย yt-dlp แบบไม่ download
+def _get_stream_url_and_dvr(url: str) -> tuple[Optional[str], int]:
+    """คืน (stream_url, dvr_duration_sec) จาก yt-dlp — ใช้สำหรับ FFmpeg seek"""
     try:
         opts = {'quiet': True, 'no_warnings': True, 'skip_download': True,
                 'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best'}
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         stream_url = info.get('url') or (info.get('requested_formats') or [{}])[0].get('url', '')
-        if not stream_url:
-            return None
+        dvr_dur = int(info.get('duration') or 0)
+        return (stream_url or None, dvr_dur)
     except:
+        return (None, 0)
+
+def _grab_live_tail(stream_url: str, out_dir: str) -> Optional[str]:
+    """ดึงวิดีโอ ~15 วิจาก live head (ใช้ FFmpeg -t ตัดจาก stream โดยตรง)"""
+    ffmpeg_exe = _get_ffmpeg_exe()
+    if not ffmpeg_exe or not stream_url:
         return None
-    # ดึงด้วย FFmpeg -t 15 จาก live head
+    out = os.path.join(out_dir, "live_tail.mp4")
     r = subprocess.run(
         [ffmpeg_exe, "-y", "-i", stream_url, "-t", "15",
          "-c", "copy", "-movflags", "+faststart", out],
@@ -522,58 +520,55 @@ def _grab_live_tail(url: str, out_dir: str) -> Optional[str]:
     return None
 
 def quick_clock_check(url: str, tmp_dir: str, api_key: str,
-                      log=None) -> Optional[tuple[str, int]]:
+                      log=None, dvr_dur: int = 0) -> Optional[tuple[str, int]]:
     """
-    ดึง 20 วิล่าสุดของ live stream → OCR นาฬิกา
-    คืน (clock_HH:MM:SS, video_pos_sec) หรือ None ถ้าล้มเหลว
-    video_pos_sec = ตำแหน่งของ frame ที่ OCR ได้ในไฟล์นั้น
+    ดึง ~15 วิล่าสุดของ live stream → OCR นาฬิกา
+    คืน (clock_HH:MM:SS, dvr_pos_sec) หรือ None ถ้าล้มเหลว
+    dvr_pos_sec = DVR position จริงของ frame ที่ OCR ได้ (นับจาก DVR start)
     """
     def _info(msg):
         if log: log(msg)
-    _info("  📥 ดึงวิดีโอ 20 วิล่าสุด...")
-    clip = _grab_live_tail(url, tmp_dir)
+    _info("  🔗 ดึง stream URL...")
+    stream_url, fetched_dvr = _get_stream_url_and_dvr(url)
+    if not stream_url:
+        _info("  ❌ ดึง stream URL ล้มเหลว")
+        return None
+    D = dvr_dur or fetched_dvr
+    _info(f"  📏 DVR ≈ {D//60} นาที")
+    _info("  📥 ดึงวิดีโอ ~15 วิล่าสุด...")
+    clip = _grab_live_tail(stream_url, tmp_dir)
     if not clip:
         _info("  ❌ ดึงวิดีโอล้มเหลว — อาจไม่รองรับ DVR")
         return None
-    dur = get_duration(clip)
-    _info(f"  📏 ได้ {dur:.1f}s")
+    tail_dur = get_duration(clip)
+    _info(f"  📏 ได้ {tail_dur:.1f}s")
     # scan จากท้ายคลิปย้อนกลับมา (นาฬิกาควรเห็นชัดตอนท้าย)
-    for t in [dur - 2, dur - 5, dur - 8, 5, 2]:
+    for t in [tail_dur - 2, tail_dur - 5, tail_dur - 8, 5, 2]:
         if t < 0:
             continue
         clock = _try_ocr_at(clip, t, tmp_dir, api_key, "tail")
         if clock:
-            _info(f"  🕐 พบนาฬิกา T={t:.0f}s → {clock}")
-            return (clock, int(t))
+            # แปลง t (position ใน tail clip) → DVR position จริง
+            dvr_pos = int(D - tail_dur + t) if D > 0 else int(t)
+            _info(f"  🕐 พบนาฬิกา T={t:.0f}s → {clock}  (DVR pos ≈ {dvr_pos}s)")
+            return (clock, dvr_pos)
     _info("  ❌ ไม่พบนาฬิกาในคลิป")
     return None
 
-def download_segment(url: str, vs: float, ve: float, out: str) -> bool:
+def download_segment(stream_url: str, vs: float, ve: float, out: str) -> bool:
+    """ดึง segment จาก stream_url ด้วย FFmpeg seek (vs, ve = DVR positions)"""
     ffmpeg_exe = _get_ffmpeg_exe()
-    opts = {
-        'format': ('bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]'
-                   '/bestvideo[ext=mp4][vcodec!^=av01][height<=1080]+bestaudio[ext=m4a]'
-                   '/best[ext=mp4]/best'),
-        'merge_output_format': 'mp4',
-        'outtmpl': out.replace('.mp4', '.%(ext)s'),
-        'download_ranges': yt_dlp.utils.download_range_func(None, [(vs, ve)]),
-        'force_keyframes_at_cuts': False,
-        'quiet': True, 'no_warnings': True, 'noplaylist': True,
-        'ffmpeg_location': ffmpeg_exe,
-        'retries': 3, 'socket_timeout': 60,
-    }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            if ydl.download([url]) == 0:
-                for f in Path(out).parent.glob(f"{Path(out).stem}.*"):
-                    if f.suffix.lower() in ('.mp4', '.mkv', '.webm'):
-                        if str(f) != out:
-                            shutil.move(str(f), out)
-                        return os.path.exists(out) and os.path.getsize(out) > 10*1024
-                return os.path.exists(out) and os.path.getsize(out) > 10*1024
+    if not ffmpeg_exe or not stream_url:
         return False
-    except:
-        return False
+    duration = ve - vs
+    r = subprocess.run(
+        [ffmpeg_exe, "-y",
+         "-ss", f"{vs:.3f}",
+         "-i", stream_url,
+         "-t", f"{duration:.3f}",
+         "-c", "copy", "-movflags", "+faststart", out],
+        capture_output=True, timeout=300)
+    return r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 10*1024
 
 # ============================================================
 # 8.  MODULE 6 — FFMPEG CONCAT (shared)
@@ -620,7 +615,8 @@ def concat_segments(seg_paths: list[str], output: str, tmp_dir: str) -> bool:
 # ============================================================
 def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
                  gemini_key: str, manual_ref: Optional[dict], log) -> dict:
-    res = {"mp4": None, "calib": None, "error": None, "need_manual": False}
+    res = {"mp4": None, "calib": None, "error": None, "need_manual": False,
+           "dvr_dur": 0, "stream_url": ""}
     os.makedirs(out_dir, exist_ok=True)
 
     log("📡 วิเคราะห์ stream...")
@@ -630,9 +626,19 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
         res["error"] = f"วิเคราะห์ stream ล้มเหลว: {e}"
         return res
 
+    log("🔗 ดึง stream URL...")
+    stream_url, dvr_dur = _get_stream_url_and_dvr(brief.youtube_url)
+    if not stream_url:
+        res["error"] = "ดึง stream URL ล้มเหลว — ตรวจสอบการเชื่อมต่อ"
+        return res
+    res["dvr_dur"]    = dvr_dur
+    res["stream_url"] = stream_url
+    log(f"  📏 DVR ≈ {dvr_dur//60} นาที")
+
     log("🔍 Calibrate Timecode...")
     try:
-        calib = calibrate(stream_info, tmp_dir, gemini_key, manual_ref, log)
+        calib = calibrate(stream_info, tmp_dir, gemini_key, manual_ref, log,
+                          stream_url=stream_url, dvr_dur=dvr_dur)
         res["calib"] = calib
     except NoClock as e:
         log(f"  ⚠️  {e}")
@@ -656,13 +662,13 @@ def run_pipeline(brief: LiveBrief, out_dir: str, tmp_dir: str,
         vs, ve = ts['video_start'], ts['video_end']
         vm, vs2 = int(vs)//60, int(vs)%60
         log(f"  📐 SEG {i}: TC {ts['start_clock']} → {ts['end_clock']}  "
-            f"= วิดีโอ {vm:02d}:{vs2:02d} ({vs:.0f}s → {ve:.0f}s)")
+            f"= DVR {vm:02d}:{vs2:02d} ({vs:.0f}s → {ve:.0f}s)")
 
     seg_paths = []
     for i, ts in enumerate(timestamps, 1):
         log(f"⬇️  Segment {i}/{len(timestamps)}: {ts['start_clock']} → {ts['end_clock']}")
         seg_out = os.path.join(tmp_dir, f"segment_{i:02d}.mp4")
-        if download_segment(brief.youtube_url, ts["video_start"], ts["video_end"], seg_out):
+        if download_segment(stream_url, ts["video_start"], ts["video_end"], seg_out):
             seg_paths.append(seg_out)
             log(f"  ✅ segment_{i:02d}.mp4 ({ts['duration']:.0f}s)")
         else:
@@ -1101,7 +1107,9 @@ _YT_DEF = {
     "live_calib":        None,
     "need_manual":       False,
     "clock_checking":    False,
-    "clock_check_result": None,  # (clock_str, video_pos_sec) หรือ "error"
+    "clock_check_result": None,  # (clock_str, dvr_pos_sec) หรือ "error"
+    "yt_dvr_dur":        0,      # DVR window length (วินาที) จาก yt-dlp
+    "yt_stream_url":     "",     # stream URL จาก yt-dlp (ใช้ซ้ำใน clock check)
 }
 _REC_DEF = {
     "rec_running":   False,
@@ -1287,11 +1295,14 @@ with tab_yt:
             _ck_result = st.session_state.get("clock_check_result")
             if _ck_result and _ck_result != "error":
                 _ck_clock, _ck_vpos = _ck_result
-                mm, ss = _ck_vpos // 60, _ck_vpos % 60
+                h3, rem = _ck_vpos // 3600, _ck_vpos % 3600
+                mm3, ss3 = rem // 60, rem % 60
+                _vpos_display = (f"{h3:02d}.{mm3:02d}.{ss3:02d}" if h3 > 0
+                                 else f"{mm3:02d}.{ss3:02d}")
                 st.markdown(
                     f'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;'
                     f'color:#2dd4a8;margin:6px 0 10px;">✅ พบนาฬิกา {_ck_clock} '
-                    f'@ วิดีโอ {mm:02d}.{ss:02d} — กรอกด้านล่างอัตโนมัติแล้ว</div>',
+                    f'@ DVR {_vpos_display} — กรอกด้านล่างอัตโนมัติแล้ว</div>',
                     unsafe_allow_html=True)
             elif _ck_result == "error":
                 st.markdown(
@@ -1307,8 +1318,10 @@ with tab_yt:
             if _ck_result and _ck_result != "error":
                 _ck_clock, _ck_vpos = _ck_result
                 _default_clock = _ck_clock
-                mm, ss = _ck_vpos // 60, _ck_vpos % 60
-                _default_vpos  = f"{mm:02d}.{ss:02d}"
+                h3, rem = _ck_vpos // 3600, _ck_vpos % 3600
+                mm3, ss3 = rem // 60, rem % 60
+                _default_vpos = (f"{h3:02d}.{mm3:02d}.{ss3:02d}" if h3 > 0
+                                 else f"{mm3:02d}.{ss3:02d}")
 
             mc1, mc2 = st.columns(2)
             with mc1:
@@ -1346,10 +1359,13 @@ with tab_yt:
             st.session_state["clock_check_result"] = None
             _chk_tmp = tempfile.mkdtemp(prefix="pylive_chk_")
             _chk_log = []
+            # ดึง dvr_dur จาก session state (ถ้า run_pipeline เคยดึงไว้แล้ว)
+            _dvr = st.session_state.get("yt_dvr_dur", 0)
             result = quick_clock_check(
                 _url_for_check, _chk_tmp,
                 _cfg.get("gemini_key1", ""),
-                log=_chk_log.append)
+                log=_chk_log.append,
+                dvr_dur=_dvr)
             st.session_state["clock_check_result"] = result if result else "error"
             st.session_state["clock_checking"] = False
             st.rerun()
@@ -1401,8 +1417,10 @@ with tab_yt:
                 manual_ref=manual_ref,
                 log=_yt_log,
             )
-            st.session_state["live_calib"]  = res.get("calib")
-            st.session_state["need_manual"] = res.get("need_manual", False)
+            st.session_state["live_calib"]    = res.get("calib")
+            st.session_state["need_manual"]   = res.get("need_manual", False)
+            if res.get("dvr_dur"):
+                st.session_state["yt_dvr_dur"] = res["dvr_dur"]
             if res["error"]:
                 _yt_log(f"❌ {res['error']}")
                 _prog(yt_prog_box, res["error"][:80], "❌", pct=0)
