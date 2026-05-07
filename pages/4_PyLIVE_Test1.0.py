@@ -433,12 +433,6 @@ def calibrate(stream_info: StreamInfo, tmp_dir: str, api_key: str,
         _info(f"  ✋ Manual calibration → stream_start = {h:02d}:{m:02d}:{s:02d}")
         return CalibResult(stream_start_sec=stream_start, confidence=1.0, method_used="manual")
 
-    if stream_info.release_timestamp:
-        dt = datetime.datetime.fromtimestamp(stream_info.release_timestamp)
-        stream_start = dt.hour * 3600 + dt.minute * 60 + dt.second
-        _info(f"  📋 Metadata → stream_start = {dt.strftime('%H:%M:%S')}")
-        return CalibResult(stream_start_sec=stream_start, confidence=0.95, method_used="metadata")
-
     _info("  🔍 โหลด Probe Clip (90 วิ / 360p)...")
     probe = _download_probe_clip(stream_info.url, tmp_dir)
     if not probe:
