@@ -865,6 +865,20 @@ def _ffmpeg_cut(src: str, start_sec: int, end_sec: int, out: str) -> bool:
 
 _VIDEO_CACHE_DIR = os.path.join(_ROOT, ".pylive_cache")
 
+def _cleanup_cache(days: int = 3) -> None:
+    """ลบไฟล์ cache ที่เก่ากว่า `days` วัน"""
+    if not os.path.isdir(_VIDEO_CACHE_DIR):
+        return
+    cutoff = datetime.date.today() - datetime.timedelta(days=days)
+    cutoff_str = cutoff.strftime("%Y%m%d")
+    for fname in os.listdir(_VIDEO_CACHE_DIR):
+        # ชื่อไฟล์รูปแบบ YYYYMMDD_<file_id><ext>
+        if len(fname) >= 8 and fname[:8].isdigit() and fname[:8] < cutoff_str:
+            try:
+                os.remove(os.path.join(_VIDEO_CACHE_DIR, fname))
+            except OSError:
+                pass
+
 def _get_cached_video(file_id: str, ext: str) -> Optional[str]:
     """คืน path ของไฟล์ที่ cache ไว้วันนี้ หรือ None ถ้ายังไม่มี"""
     today = datetime.date.today().strftime("%Y%m%d")
@@ -947,6 +961,7 @@ def run_local_pipeline(brief: RecBrief, out_dir: str, tmp_dir: str,
 # ============================================================
 st.set_page_config(page_title="PyL.I.V.E.", page_icon="🎬", layout="wide")
 inject_global_css()
+_cleanup_cache(days=3)
 
 st.markdown("""<style>
 :root{--bg0:#0d0f12;--bg1:#13161b;--bg2:#1a1e26;
