@@ -496,27 +496,29 @@ def _download_probe_clip(url: str, out_dir: str, start_sec: int = 0) -> Optional
         return None
 
 def _grab_live_tail(url: str, out_dir: str) -> Optional[str]:
-    """ดึงวิดีโอ ~20 วินาทีล่าสุดจาก DVR live stream"""
+    """ดึงวิดีโอ ~15 วิจาก live head (ใช้ FFmpeg -t ตัดจาก stream โดยตรง)"""
     ffmpeg_exe = _get_ffmpeg_exe()
+    if not ffmpeg_exe:
+        return None
     out = os.path.join(out_dir, "live_tail.mp4")
-    opts = {
-        'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best',
-        'merge_output_format': 'mp4',
-        'outtmpl': out.replace('.mp4', '.%(ext)s'),
-        'download_ranges': yt_dlp.utils.download_range_func(None, [(-20, None)]),
-        'quiet': True, 'no_warnings': True, 'noplaylist': True,
-        'ffmpeg_location': ffmpeg_exe,
-        'retries': 2, 'socket_timeout': 30,
-        'live_from_start': False,
-    }
+    # ดึง stream URL ก่อนด้วย yt-dlp แบบไม่ download
     try:
+        opts = {'quiet': True, 'no_warnings': True, 'skip_download': True,
+                'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best'}
         with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-        for f in Path(out_dir).glob("live_tail.*"):
-            if get_duration(str(f)) >= 5:
-                return str(f)
+            info = ydl.extract_info(url, download=False)
+        stream_url = info.get('url') or (info.get('requested_formats') or [{}])[0].get('url', '')
+        if not stream_url:
+            return None
     except:
-        pass
+        return None
+    # ดึงด้วย FFmpeg -t 15 จาก live head
+    r = subprocess.run(
+        [ffmpeg_exe, "-y", "-i", stream_url, "-t", "15",
+         "-c", "copy", "-movflags", "+faststart", out],
+        capture_output=True, timeout=60)
+    if r.returncode == 0 and os.path.exists(out) and get_duration(out) >= 3:
+        return out
     return None
 
 def quick_clock_check(url: str, tmp_dir: str, api_key: str,
@@ -1467,12 +1469,11 @@ with tab_yt:
             lines = st.session_state["live_log"][-60:]
             st.markdown('<div class="lg">' + "<br>".join(lines) + '</div>', unsafe_allow_html=True)
 
-    if st.session_state["live_done"]:
-        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-        if st.button("🔄 เริ่มใหม่", key="yt_reset_btn"):
-            for k, v in _YT_DEF.items():
-                st.session_state[k] = v
-            st.rerun()
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    if st.button("🔄 เริ่มใหม่", key="yt_reset_btn"):
+        for k, v in _YT_DEF.items():
+            st.session_state[k] = v
+        st.rerun()
 
 # ════════════════════════════════════════════════════════════
 # TAB 2 — LOCAL (REC)
