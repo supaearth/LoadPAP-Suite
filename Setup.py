@@ -82,8 +82,13 @@ def check_python():
     header("1/5  เช็ค Python version")
     v = sys.version_info
     if v.major < 3 or (v.major == 3 and v.minor < 10):
-        err(f"Python {v.major}.{v.minor} — ต้องการ Python 3.10 ขึ้นไป")
-        err("ดาวน์โหลดได้ที่ https://www.python.org/downloads/")
+        err(f"Python {v.major}.{v.minor} — ต้องการ Python 3.10–3.12")
+        err("ดาวน์โหลด Python 3.12 ได้ที่ https://www.python.org/downloads/")
+        sys.exit(1)
+    if v.major == 3 and v.minor >= 13:
+        err(f"Python {v.major}.{v.minor} — ยังไม่รองรับ (ใช้ได้แค่ 3.10–3.12)")
+        err("กรุณาติดตั้ง Python 3.12 แล้วรัน: python3.12 setup.py")
+        err("ดาวน์โหลด Python 3.12 ได้ที่ https://www.python.org/downloads/")
         sys.exit(1)
     ok(f"Python {v.major}.{v.minor}.{v.micro}")
 
