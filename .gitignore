@@ -45,3 +45,6 @@ ffplay
 
 # --- Claude Code ---
 .claude/
+
+# --- Context files (local only) ---
+*_CLAUDE.md
