@@ -54,7 +54,7 @@ def _get_ffmpeg():
 
 FFMPEG_EXE = _get_ffmpeg()
 GAP_SEC = 3 / 25        # 3 frames @ 25fps = 0.120s
-MAX_CHARS_VERTICAL = 18  # DaVinci auto-wrap ที่ ~19-20 chars — ต้องต่ำกว่านี้
+MAX_CHARS_VERTICAL = 26  # ตัดบรรทัดเองเมื่อ > 26 chars (ให้ DaVinci handle 19-26)
 GEMINI_MODEL = "gemini-2.0-flash-lite"
 
 _cfg = load_config()
@@ -92,8 +92,12 @@ def _init():
         "pycut_srt_editor": "",
         "pycut_running": False,
         "pycut_watchdog_stop": None,
+        "pycut_watchdog_on": False,
+        "pycut_run_id": 0,
         "pycut_error": "",
         "pycut_result_holder": None,
+        "pycut_prewd_on": False,
+        "pycut_prewd_found": {},
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -102,8 +106,8 @@ def _init():
 
 _init()
 
-# ── sync result_holder → session_state (main loop อ่านผล thread) ──
-if st.session_state["pycut_running"]:
+# ── autorefresh: เมื่อ running หรือ pre-run watchdog เปิดอยู่ ──
+if st.session_state["pycut_running"] or st.session_state.get("pycut_prewd_on"):
     from streamlit_autorefresh import st_autorefresh
     st_autorefresh(interval=2000, key="pycut_refresh")
     holder = st.session_state.get("pycut_result_holder")
@@ -136,14 +140,7 @@ def _gemini_keys() -> list[str]:
     cfg = load_config()
     return [k for k in [cfg.get("gemini_key1", ""), cfg.get("gemini_key2", "")] if k]
 
-_whisper_model_cache: dict = {}
-
-def _get_whisper_model(size: str = "medium"):
-    """Load faster-whisper model (cache ไว้ ไม่ load ซ้ำ)"""
-    if size not in _whisper_model_cache:
-        from faster_whisper import WhisperModel
-        _whisper_model_cache[size] = WhisperModel(size, device="cpu", compute_type="int8")
-    return _whisper_model_cache[size]
+_MLX_WHISPER_REPO = "mlx-community/whisper-large-v3-mlx"
 
 
 # (model_id, api_version)
@@ -154,6 +151,9 @@ _SOT_MODELS = [
     ("gemini-1.5-flash-latest",   "v1"),      # legacy fallback
 ]
 
+# persistent key rotation — เริ่มจาก key ที่ไม่ quota แล้วครั้งล่าสุด
+_gemini_key_idx = [0]
+
 # ──────────────────────────────────────────────────────────────
 # DOC PARSER
 # ──────────────────────────────────────────────────────────────
@@ -163,9 +163,17 @@ def parse_tc(tc_str: str) -> float | None:
         return None
     if "." in tc_str:
         parts = tc_str.split(".")
-        minutes = float(parts[0]) if parts[0] else 0.0
-        sec_str = parts[1].ljust(2, "0")[:2]
-        return minutes * 60.0 + float(sec_str)
+        if len(parts) == 3:
+            # H.MM.SS
+            hours = float(parts[0]) if parts[0] else 0.0
+            minutes = float(parts[1]) if parts[1] else 0.0
+            sec_str = parts[2].ljust(2, "0")[:2]
+            return hours * 3600.0 + minutes * 60.0 + float(sec_str)
+        else:
+            # MM.SS
+            minutes = float(parts[0]) if parts[0] else 0.0
+            sec_str = parts[1].ljust(2, "0")[:2]
+            return minutes * 60.0 + float(sec_str)
     try:
         return float(tc_str)
     except Exception:
@@ -411,6 +419,7 @@ _CLAUSE_STARTERS = {
 
 
 _MIN_SENT_CHARS = 15  # ตัดเมื่อ accumulate >= 15 chars เท่านั้น (ป้องกัน particle โดดๆ และประโยคสั้นเกิน)
+_MIN_BLOCK_CHARS = 10  # blocks สั้นกว่านี้ถือว่า orphan → merge เข้า block ก่อนหน้า
 
 
 def _word_sent_split(src: str) -> list[str]:
@@ -447,6 +456,27 @@ def _word_sent_split(src: str) -> list[str]:
             sentences.append(sent)
 
     return sentences if len(sentences) > 1 else []
+
+
+def _merge_short_blocks(parts: list[str]) -> list[str]:
+    """Merge orphan blocks (< _MIN_BLOCK_CHARS chars) เข้า block ก่อนหน้าเสมอถ้าทำได้
+    ใช้หลัง split เพื่อป้องกัน subtitle สั้นเกิน เช่น 'กว่านี้' / 'นั้น' / 'หรือ'
+    """
+    if len(parts) <= 1:
+        return parts
+    result = []
+    for p in parts:
+        if result and len(p) < _MIN_BLOCK_CHARS:
+            prev = result[-1]
+            # เพิ่ม space เมื่อ prev ลงท้ายด้วย ASCII alphanumeric (เช่น UNCLOS)
+            joiner = " " if prev[-1:].isascii() and prev[-1:].isalnum() else ""
+            combined = prev + joiner + p
+            # อนุญาตให้ยาวถึง _SOT_MAX_CHARS + 10 เพราะ _linebreak_thai จัดการต่อ
+            if len(combined) <= _SOT_MAX_CHARS + 10:
+                result[-1] = combined
+                continue
+        result.append(p)
+    return result
 
 
 def _split_sot_sentences(text: str) -> list[str]:
@@ -566,11 +596,12 @@ def parse_pycut_doc(doc_id: str) -> dict:
         footage_pairs = [(v, d) for v, d in raw_footage_pairs if not v.strip().lower().startswith("ปล่อยเสียง")]
 
         # ซอยทุก bullet ให้ ≤ _SOT_MAX_CHARS เสมอ (ทั้ง SOT และ VO)
+        # จากนั้น merge orphan blocks สั้น (< _MIN_BLOCK_CHARS) เข้า block ก่อนหน้า
         if bullets:
             split = []
             for b in bullets:
                 split.extend(_split_sot_sentences(b))
-            bullets = split
+            bullets = _merge_short_blocks(split)
 
         if not footage_pairs:
             # ไม่มี footage — ถ้ามี TC ให้ใช้ footage ล่าสุด (inherit)
@@ -582,7 +613,7 @@ def parse_pycut_doc(doc_id: str) -> dict:
                     "tc_in": tc_in,
                     "tc_out": tc_out,
                     "bullets": bullets,
-                    "sot": sot,
+                    "sot": last_footage.get("sot", False),  # inherit sot จาก row ก่อนหน้า
                     "inherited_footage": True,
                     "is_insert": False,
                 })
@@ -624,6 +655,7 @@ def parse_pycut_doc(doc_id: str) -> dict:
                 "footage_display": last_disp,
                 "footage_type": last_ft,
                 "file_id": extract_id(last_raw) if last_ft == "drive" else None,
+                "sot": sot,
             }
 
         # ── Insert column: เพิ่มแถวแยกต่างหาก is_insert=True ──
@@ -658,7 +690,7 @@ def _srt_ts(seconds: float) -> str:
 
 def _calc_duration(text: str) -> float:
     n = len(text.replace("\n", ""))
-    return max(n / 16.0, 1.0)
+    return max(n / 14.0, 1.5)
 
 
 def _split_line(text: str, is_vertical: bool, client) -> str:
@@ -735,8 +767,10 @@ def build_srt(rows: list[dict], is_vertical: bool, client) -> str:
             timestamps = row.get("sot_timestamps")  # [(ts, te)] จาก Gemini
 
             if timestamps and len(timestamps) >= len(bullets):
-                # ── Gemini timing + script text ──
+                # ── Whisper timing — cap te ไม่ให้เกิน clip_dur ──
                 for text, (ts, te) in zip(bullets, timestamps):
+                    ts = max(0.0, min(ts, clip_dur))
+                    te = max(ts + 0.1, min(te, clip_dur))
                     formatted = _split_line(text, is_vertical, client).replace("\n", CRLF)
                     block = (
                         f"{n}{CRLF}"
@@ -1049,119 +1083,367 @@ def cut_video(input_path: str, out_path: str, tc_in: float | None, tc_out: float
     return False
 
 
-def _extract_audio_clip(video_path: str, fmt: str = "wav") -> str | None:
-    """แปลง video → mono 16kHz audio (wav สำหรับ Whisper, mp3 สำหรับ Gemini)"""
+def _extract_audio_clip(video_path: str, fmt: str = "wav",
+                        tc_in: float | None = None, tc_out: float | None = None) -> str | None:
+    """แปลง video → mono 16kHz audio (wav สำหรับ Whisper)
+    tc_in / tc_out: ถ้าระบุจะ seek ตัดเฉพาะช่วงนั้น (สำหรับกรณีไม่ cut_by_tc)
+    """
     tmp = video_path.rsplit(".", 1)[0] + f"_sot_audio.{fmt}"
+    cmd = [FFMPEG_EXE, "-y"]
+    if tc_in is not None and tc_in > 0:
+        cmd += ["-ss", str(tc_in)]
+    cmd += ["-i", video_path]
+    if tc_in is not None and tc_out is not None and tc_out > tc_in:
+        cmd += ["-t", str(tc_out - tc_in)]
     if fmt == "wav":
-        cmd = [FFMPEG_EXE, "-y", "-i", video_path,
-               "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16", tmp]
+        cmd += ["-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16", tmp]
     else:
-        cmd = [FFMPEG_EXE, "-y", "-i", video_path,
-               "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", tmp]
+        cmd += ["-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", tmp]
     r = subprocess.run(cmd, capture_output=True)
     if r.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 0:
         return tmp
     return None
 
 
+def _get_audio_duration(audio_path: str) -> float:
+    """คืน duration ของไฟล์ audio เป็นวินาที ผ่าน ffmpeg -i"""
+    try:
+        r = subprocess.run(
+            [FFMPEG_EXE, "-i", audio_path, "-f", "null", "-"],
+            capture_output=True, text=True,
+        )
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", r.stderr)
+        if m:
+            return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    except Exception:
+        pass
+    return 0.0
+
+
+def _extract_json_array(text: str) -> str | None:
+    """ดึง outermost JSON array จาก text โดย track bracket depth
+    ป้องกันปัญหา non-greedy regex หยุดที่ ] แรกใน nested array
+    """
+    start = text.find('[')
+    if start == -1:
+        return None
+    depth = 0
+    for i, c in enumerate(text[start:], start):
+        if c == '[':
+            depth += 1
+        elif c == ']':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+_TEXT_ALIGN_MODELS = [
+    ("gemini-3.1-flash-lite", "v1beta"),  # primary — RPD 15, text-only task
+    ("gemini-2.5-flash-lite", "v1beta"),
+    ("gemini-2.0-flash-lite", "v1beta"),
+    ("gemini-2.5-flash",      "v1beta"),
+]
+
+
+def _align_via_gemini_words(
+    words: list[dict],      # [{w, s, e}, ...] — word-level timestamps จาก Whisper
+    sentences: list[str],
+    log: list,
+) -> list[tuple[str, float, float]]:
+    """Gemini word-level alignment
+    ส่ง words + timestamps แต่ละคำ → Gemini map Thai subtitle → word index range
+    แม่นกว่า segment-level เพราะมี anchor point มากกว่า 10-50x
+    คืน [(text, start, end), ...] หรือ [] ถ้าล้มเหลว
+    """
+    import json as _json
+
+    if not sentences or not words:
+        return []
+    keys = _gemini_keys()
+    if not keys:
+        return []
+
+    word_json = _json.dumps(words, ensure_ascii=False, separators=(",", ":"))
+    thai_list = "\n".join(f"{i+1}.{s}" for i, s in enumerate(sentences))
+
+    prompt = (
+        "English words with timestamps (0-based index, seconds):\n"
+        f"{word_json}\n\n"
+        "Thai subtitles (translation of the above, in order):\n"
+        f"{thai_list}\n\n"
+        "For each Thai subtitle (1-based idx), which word index range does it cover?\n"
+        "Return ONLY JSON array:\n"
+        '[{"idx":1,"wstart":0,"wend":4},{"idx":2,"wstart":5,"wend":9}]'
+    )
+    log.append(f"  prompt {len(prompt)} chars | {len(words)} words | {len(sentences)} subs")
+
+    _n = len(keys)
+    _ordered = [keys[(_gemini_key_idx[0] + i) % _n] for i in range(_n)]
+
+    for model, api_ver in _TEXT_ALIGN_MODELS:
+        for key in _ordered:
+            try:
+                log.append(f"  🤖 Gemini word-align {model} key[...{key[-4:]}]")
+                c = genai.Client(api_key=key, http_options={"api_version": api_ver})
+                resp = c.models.generate_content(model=model, contents=[prompt])
+                raw = resp.text.strip()
+                _arr = _extract_json_array(raw)
+                if not _arr:
+                    log.append(f"  ⚠️ {model}: ไม่พบ JSON array")
+                    continue
+                data = _json.loads(_arr)
+                if not isinstance(data, list) or not data:
+                    log.append(f"  ⚠️ {model}: JSON ว่าง")
+                    continue
+                result: list[tuple[str, float, float]] = []
+                for i, item in enumerate(sorted(data, key=lambda x: x.get("idx", 0))):
+                    if i >= len(sentences):
+                        break
+                    wi0 = max(0, int(item.get("wstart", 0)))
+                    wi1 = min(len(words) - 1, int(item.get("wend", wi0)))
+                    ts = words[wi0]["s"]
+                    te = max(words[wi1]["e"], ts + 0.3)
+                    result.append((sentences[i], ts, te))
+                while len(result) < len(sentences):
+                    last_end = result[-1][2] if result else 0.0
+                    result.append((sentences[len(result)], last_end + 0.2, last_end + 2.2))
+                log.append(f"  ✅ Gemini word-align: {len(result)} blocks ← {model}")
+                return result[:len(sentences)]
+            except Exception as _e:
+                err_str = str(_e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    _gemini_key_idx[0] = (_gemini_key_idx[0] + 1) % _n
+                    log.append(f"  ↩ {model} quota หมด — rotate key")
+                    continue
+                log.append(f"  ⚠️ {model}: {err_str[:100]}")
+                break
+
+    return []
+
+
+def _align_via_gemini_text(
+    eng_segs: list[dict],
+    sentences: list[str],
+    log: list,
+) -> list[tuple[str, float, float]]:
+    """Gemini text-only: map Thai subtitle blocks → timestamps
+    ส่งแค่ข้อความ (English transcript จาก Whisper + Thai subs) — ไม่ส่ง audio
+    Gemini แค่ทำ translation alignment (ง่าย + ถูก)
+    คืน [(text, start, end), ...] หรือ [] ถ้าล้มเหลว
+    """
+    import json as _json
+
+    if not sentences or not eng_segs:
+        return []
+    keys = _gemini_keys()
+    if not keys:
+        log.append("  ⚠️ Gemini text-align: ไม่มี key")
+        return []
+
+    clean_segs = [
+        {"s": round(s["start"], 1), "e": round(s["end"], 1), "t": s["text"].strip()}
+        for s in eng_segs if s.get("text", "").strip()
+    ]
+    if not clean_segs:
+        return []
+
+    # compact JSON — ลด field name ให้สั้น, จำกัด 40 segments (ป้องกัน prompt ใหญ่เกิน)
+    seg_json  = _json.dumps(clean_segs[:40], ensure_ascii=False, separators=(",", ":"))
+    thai_list = "\n".join(f"{i+1}.{s}" for i, s in enumerate(sentences))
+
+    prompt = (
+        "English segments [{s:start,e:end,t:text}]:\n"
+        f"{seg_json}\n\n"
+        "Thai subtitles (translation, in order):\n"
+        f"{thai_list}\n\n"
+        "Return ONLY JSON array mapping each Thai subtitle to its timestamp:\n"
+        '[{"idx":1,"start":0.0,"end":3.5},{"idx":2,"start":3.6,"end":7.2}]'
+    )
+    log.append(f"  prompt {len(prompt)} chars | {len(clean_segs)} segs | {len(sentences)} subs")
+
+    _n = len(keys)
+    _ordered = [keys[(_gemini_key_idx[0] + i) % _n] for i in range(_n)]
+
+    for model, api_ver in _TEXT_ALIGN_MODELS:
+        for key in _ordered:
+            try:
+                log.append(f"  🤖 Gemini text-align {model} key[...{key[-4:]}]")
+                c = genai.Client(api_key=key, http_options={"api_version": api_ver})
+                resp = c.models.generate_content(model=model, contents=[prompt])
+                raw = resp.text.strip()
+                _arr = _extract_json_array(raw)
+                if not _arr:
+                    log.append(f"  ⚠️ {model}: ไม่พบ JSON array")
+                    continue
+                data = _json.loads(_arr)
+                if not isinstance(data, list) or not data:
+                    log.append(f"  ⚠️ {model}: JSON ว่าง")
+                    continue
+                result: list[tuple[str, float, float]] = []
+                for i, item in enumerate(sorted(data, key=lambda x: x.get("idx", 0))):
+                    if i >= len(sentences):
+                        break
+                    ts = float(item.get("start", 0.0))
+                    te = float(item.get("end", ts + 2.0))
+                    te = max(ts + 0.3, te)
+                    result.append((sentences[i], ts, te))
+                # pad ถ้า Gemini คืนน้อยกว่า sentences
+                while len(result) < len(sentences):
+                    last_end = result[-1][2] if result else 0.0
+                    result.append((sentences[len(result)], last_end + 0.2, last_end + 2.2))
+                log.append(f"  ✅ Gemini text-align: {len(result)} blocks ← {model}")
+                return result[:len(sentences)]
+            except Exception as _e:
+                err_str = str(_e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    _gemini_key_idx[0] = (_gemini_key_idx[0] + 1) % _n
+                    log.append(f"  ↩ {model} quota หมด — rotate key")
+                    continue
+                log.append(f"  ⚠️ {model}: {err_str[:100]}")
+                break  # error อื่นไม่ต้อง retry key เดิม
+
+    log.append("  ⚠️ Gemini text-align: ทุก model ล้มเหลว — fallback char-proportional")
+    return []
+
+
 def _analyze_sot_timing_whisper(
     audio_path: str, sentences: list[str], log: list
 ) -> list[tuple[str, float, float]]:
-    """Transcribe audio → [(text, start_sec, end_sec), ...] subtitle blocks
-
-    Thai speech   → ใช้ Whisper segment text + timestamps โดยตรง (sync แม่น)
-    Non-Thai      → ใช้ script sentences + proportional timing (เสียงแปลไทย)
+    """แบ่ง sentences ให้ cover ช่วงพูดจริงใน audio
+    - ใช้ mlx-whisper detect segments (ได้ start/end ของทุก speech segment)
+    - skip gaps ระหว่าง segment (ช่วงเงียบ/pause ไม่นับ)
+    - แบ่ง subtitles proportional ตาม character count (ซับยาว = เวลานานกว่า)
+    คืน [(text, start_sec, end_sec), ...]
     """
-    try:
-        model = _get_whisper_model("medium")
-    except ImportError:
-        log.append("  ⚠️ faster-whisper ไม่ได้ติดตั้ง — pip install faster-whisper")
+    if not sentences:
         return []
 
-    try:
-        log.append("  🔊 Whisper transcribing...")
-        segs, info = model.transcribe(
-            audio_path,
-            word_timestamps=True,
-            language=None,
-            beam_size=5,
-            vad_filter=True,
-        )
-        seg_list = list(segs)  # consume generator
+    # patch ffmpeg PATH สำหรับ background thread
+    if FFMPEG_EXE and os.path.isabs(FFMPEG_EXE):
+        _ff_dir = os.path.dirname(FFMPEG_EXE)
+        if _ff_dir and _ff_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = _ff_dir + os.pathsep + os.environ.get("PATH", "")
 
-        if not seg_list:
-            log.append("  ⚠️ Whisper: ไม่พบเสียงพูด")
+    # duration จริงของไฟล์ — ใช้ cap speech_end
+    file_dur = _get_audio_duration(audio_path)
+    n = len(sentences)
+
+    def _char_proportional(speech_events: list[tuple[float, float]]) -> list[tuple[str, float, float]]:
+        """แบ่ง sentences ตาม char count บน compressed speech timeline (ไม่มี gap)"""
+        total_speech = sum(e - s for s, e in speech_events)
+        if total_speech <= 0:
             return []
 
-        log.append(
-            f"  🔊 Whisper: {len(seg_list)} segs | lang={info.language} ({info.language_probability:.0%})"
-        )
+        def pos_to_time(pos: float) -> float:
+            """แปลง position บน speech-only axis → timestamp จริง"""
+            acc = 0.0
+            for s, e in speech_events:
+                dur = e - s
+                if pos <= acc + dur:
+                    return s + (pos - acc)
+                acc += dur
+            return speech_events[-1][1]
 
-        # ── Thai speech: ใช้ Whisper segments โดยตรง ──
-        if info.language == "th":
-            blocks: list[tuple[str, float, float]] = []
-            for seg in seg_list:
-                text = seg.text.strip()
-                if not text:
-                    continue
-                pieces = _split_sot_sentences(text)
-                if len(pieces) == 1:
-                    blocks.append((text, seg.start, seg.end))
-                else:
-                    dur = seg.end - seg.start
-                    total_c = sum(len(p) for p in pieces)
-                    t = seg.start
-                    for piece in pieces:
-                        d = len(piece) / max(total_c, 1) * dur
-                        blocks.append((piece, t, t + d))
-                        t += d
-            return blocks
-
-        # ── Non-Thai (เสียงต่างประเทศ ซับไทย): proportional alignment ──
-        words: list[tuple[str, float, float]] = [
-            (w.word, w.start, w.end)
-            for seg in seg_list for w in (seg.words or [])
-        ]
-        if not words:
-            return []
-
-        total_chars = sum(len(s) for s in sentences)
-        total_words = len(words)
+        total_chars = sum(len(sent) for sent in sentences) or n
+        char_acc = 0
         blocks = []
-        word_cursor = 0
-
-        for i, sent in enumerate(sentences):
-            if word_cursor >= total_words:
-                last = blocks[-1][2] if blocks else words[-1][2]
-                blocks.append((sent, last + 0.05, last + 1.0))
-                continue
-            if i == len(sentences) - 1:
-                chunk = words[word_cursor:]
-            else:
-                ratio = len(sent) / max(total_chars, 1)
-                n = max(1, round(ratio * total_words))
-                max_n = total_words - word_cursor - (len(sentences) - i - 1)
-                n = min(n, max_n)
-                chunk = words[word_cursor:word_cursor + n]
-                word_cursor += n
-            if chunk:
-                blocks.append((sent, chunk[0][1], chunk[-1][2]))
-            else:
-                last = blocks[-1][2] if blocks else 0.0
-                blocks.append((sent, last + 0.05, last + 1.0))
-
+        for sent in sentences:
+            t0 = pos_to_time(total_speech * char_acc / total_chars)
+            char_acc += len(sent)
+            t1 = pos_to_time(total_speech * char_acc / total_chars)
+            t1 = max(t0 + 0.3, t1)
+            blocks.append((sent, t0, t1))
         return blocks
 
+    try:
+        import mlx_whisper
+        log.append(f"  🔊 mlx-whisper ({_MLX_WHISPER_REPO}) word_timestamps...")
+        result = mlx_whisper.transcribe(
+            audio_path,
+            path_or_hf_repo=_MLX_WHISPER_REPO,
+            word_timestamps=True,   # word-level timestamps → anchor แม่นขึ้น ~10-50x
+            language=None,
+        )
+        segs = result.get("segments", [])
+        lang = result.get("language", "?")
+
+        # ── Extract words (with text) + word_events (for proportional fallback) ──
+        words_with_text: list[dict] = []   # [{w, s, e}, ...] สำหรับ Gemini word-align
+        word_events: list[tuple[float, float]] = []   # (s, e) สำหรับ char-proportional
+
+        for seg in segs:
+            for w in seg.get("words", []):
+                ws = max(w.get("start", seg["start"]), 0.0)
+                we = w.get("end", seg.get("end", ws + 0.1))
+                if file_dur > 0:
+                    we = min(we, file_dur)
+                wtext = w.get("word", "").strip()
+                if we - ws >= 0.02 and wtext:
+                    words_with_text.append({"w": wtext, "s": round(ws, 2), "e": round(we, 2)})
+                    word_events.append((ws, we))
+
+        # ── fallback: segment-level ถ้าไม่มี word timestamps ──
+        seg_events: list[tuple[float, float]] = []
+        for seg in segs:
+            s = max(seg["start"], 0.0)
+            e = seg["end"]
+            if file_dur > 0:
+                e = min(e, file_dur)
+            if e - s >= 0.2:
+                seg_events.append((s, e))
+
+        speech_events = word_events if word_events else seg_events
+        level = "words" if word_events else "segments"
+
+        if speech_events:
+            total_speech = sum(e - s for s, e in speech_events)
+            t0 = speech_events[0][0]
+            t1 = speech_events[-1][1]
+            log.append(
+                f"  lang={lang} | {len(speech_events)} {level} | "
+                f"speech {t0:.1f}s→{t1:.1f}s ({total_speech:.1f}s active)"
+            )
+
+            # ── Step 2a: Gemini word-align (แม่นที่สุด — map Thai sub → word index) ──
+            if words_with_text:
+                gemini_blocks = _align_via_gemini_words(words_with_text, sentences, log)
+                if gemini_blocks:
+                    return gemini_blocks
+
+            # ── Step 2b: Gemini segment-align (fallback ถ้าไม่มี word text) ──
+            gemini_blocks = _align_via_gemini_text(segs, sentences, log)
+            if gemini_blocks:
+                return gemini_blocks
+
+            # ── Step 3: char-proportional fallback ──
+            log.append(f"  ✅ char-proportional → {n} blocks")
+            return _char_proportional(speech_events)
+
+    except ImportError:
+        log.append("  ⚠️ mlx-whisper ไม่ได้ติดตั้ง — ใช้ file_dur fallback")
     except Exception as e:
-        log.append(f"  ⚠️ Whisper error: {e}")
-        return []
+        log.append(f"  ⚠️ mlx-whisper error: {e} — ใช้ file_dur fallback")
+
+    # fallback: ไม่ได้ Whisper → แบ่ง file duration proportional ตาม char count
+    if file_dur > 0:
+        total_chars = sum(len(sent) for sent in sentences) or n
+        char_acc = 0
+        blocks = []
+        for sent in sentences:
+            t0 = file_dur * char_acc / total_chars
+            char_acc += len(sent)
+            t1 = max(t0 + 0.3, file_dur * char_acc / total_chars)
+            blocks.append((sent, t0, t1))
+        log.append(f"  ✅ file_dur fallback: char-proportional {n} blocks over {file_dur:.1f}s")
+        return blocks
+
+    return []
 
 
 def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list) -> list[tuple[float, float]]:
-    """ส่ง audio clip → Gemini → คืน [(start_sec, end_sec), ...] ต่อ sentence
-    - rotate key เมื่อ 429
-    - fallback model ถ้า key หมด
-    - คืน [] ถ้าทุก attempt ล้มเหลว (caller จะ fallback แบ่งเวลาเท่ากัน)
+    """ส่ง audio bytes → Gemini → คืน [(start_sec, end_sec), ...] ต่อ sentence
+    คืน [] ถ้าล้มเหลว (caller fallback แบ่งเวลาเท่ากัน)
     """
     import json as _json
     from google.genai import types as _gtypes
@@ -1188,9 +1470,14 @@ def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list
         log.append(f"  ⚠️ ไม่มี Gemini key")
         return []
 
+    # เริ่มจาก key ที่ไม่ quota แล้วครั้งล่าสุด (persistent rotation แบบ PyLOG)
+    _n = len(keys)
+    _ordered = [keys[(_gemini_key_idx[0] + i) % _n] for i in range(_n)]
+
     for model, api_ver in _SOT_MODELS:
-        for key in keys:
+        for key in _ordered:
             try:
+                log.append(f"  → Gemini {model} key[...{key[-4:]}]")
                 c = genai.Client(api_key=key, http_options={"api_version": api_ver})
                 resp = c.models.generate_content(
                     model=model,
@@ -1200,11 +1487,11 @@ def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list
                     ],
                 )
                 raw = resp.text.strip()
-                m = re.search(r'\[.*?\]', raw, re.DOTALL)
-                if not m:
+                _arr = _extract_json_array(raw)
+                if not _arr:
                     log.append(f"  ⚠️ {model}: ไม่พบ JSON")
                     continue
-                data = _json.loads(m.group())
+                data = _json.loads(_arr)
                 result: list[tuple[float, float]] = []
                 for item in sorted(data, key=lambda x: x.get("idx", 0)):
                     s = float(item.get("start", 0))
@@ -1218,10 +1505,11 @@ def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list
             except Exception as _e:
                 err_str = str(_e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    log.append(f"  ↩ {model} key[...{key[-4:]}] quota หมด — ลอง key ถัดไป")
+                    _gemini_key_idx[0] = (_gemini_key_idx[0] + 1) % _n  # rotate ถาวรสำหรับ call ถัดไป
+                    log.append(f"  ↩ {model} key[...{key[-4:]}] quota หมด — rotate key")
                     continue
                 log.append(f"  ⚠️ {model}: {err_str[:120]}")
-                break  # error อื่น (404 etc.) → ข้ามไป model ถัดไปเลย
+                break
 
     log.append(f"  ⚠️ SOT timing: ทุก key/model ล้มเหลว — ใช้ fallback แบ่งเวลาเท่ากัน")
     return []
@@ -1232,7 +1520,8 @@ def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list
 
 def _do_cut_and_sot(raw: str, idx: int, row: dict, cut_folder: str,
                     cut_by_tc: bool, pad_cut: bool, gclient,
-                    log: list, status_ref: dict, key: str, set_status) -> str | None:
+                    log: list, status_ref: dict, key: str, set_status,
+                    do_srt: bool = True) -> str | None:
     """ตัดตาม TC (ถ้ามี) + วิเคราะห์ SOT timing → คืน final_path หรือ None ถ้าล้มเหลว
     insert rows: copy ไปยัง cut_folder โดยไม่ตัด TC
     """
@@ -1263,18 +1552,22 @@ def _do_cut_and_sot(raw: str, idx: int, row: dict, cut_folder: str,
             status_ref[key] = "error"
             return None
 
-    if row.get("sot") and row["bullets"] and gclient:
-        log.append(f"    🎙️ วิเคราะห์ SOT timing row {idx}...")
-        set_status(f"🎙️  #{idx:02d} — วิเคราะห์ SOT เสียง...")
-        audio_mp3 = _extract_audio_clip(final_path, fmt="mp3")
-        if audio_mp3:
-            timing = _analyze_sot_timing(audio_mp3, row["bullets"], gclient, log)
+    if do_srt and row.get("sot") and row["bullets"]:
+        log.append(f"    🎙️ Whisper row {idx}...")
+        set_status(f"🎙️  #{idx:02d} — Whisper...")
+        _wtc_in  = row["tc_in"]  if not cut_by_tc else None
+        _wtc_out = row["tc_out"] if not cut_by_tc else None
+        wav_path = _extract_audio_clip(final_path, fmt="wav", tc_in=_wtc_in, tc_out=_wtc_out)
+        if wav_path:
+            words_w, speech_ev, clean_segs = _whisper_sot_words(wav_path, log)
             try:
-                os.remove(audio_mp3)
+                os.remove(wav_path)
             except Exception:
                 pass
-            if timing:
-                row["sot_timestamps"] = timing
+            # เก็บ Whisper data ไว้ใน row → batch Gemini ใน run_pycut
+            row["_sot_whisper"] = {"words": words_w, "events": speech_ev, "segs": clean_segs}
+        else:
+            log.append(f"    ⚠️ แปลง audio ล้มเหลว — ข้าม SOT timing")
 
     return final_path
 
@@ -1283,6 +1576,29 @@ def _do_cut_and_sot(raw: str, idx: int, row: dict, cut_folder: str,
 # STOCK HELPERS
 # ──────────────────────────────────────────────────────────────
 VIDEO_EXTS = ('.mp4', '.mov', '.m4v', '.avi', '.mxf', '.mkv')
+IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff')
+
+
+def _prewd_scan(watch_folder: str, stock_items: list[dict]) -> dict:
+    """สแกน watch_folder ทันที — คืน {search_code: filename|None}"""
+    result: dict = {item["search_code"]: None for item in stock_items}
+    if not watch_folder or not os.path.isdir(watch_folder):
+        return result
+    try:
+        files = [
+            f for f in os.listdir(watch_folder)
+            if not f.startswith('.') and not f.startswith('._')
+            and os.path.splitext(f)[1].lower() in VIDEO_EXTS
+        ]
+    except Exception:
+        return result
+    for item in stock_items:
+        code = item["search_code"]
+        for fname in files:
+            if code in fname.lower() and os.path.getsize(os.path.join(watch_folder, fname)) > 0:
+                result[code] = fname
+                break
+    return result
 
 
 def _extract_stock_code(footage_raw: str, footage_type: str) -> str:
@@ -1313,72 +1629,38 @@ def _extract_stock_code(footage_raw: str, footage_type: str) -> str:
 MAX_OPEN_TABS = 10
 
 def make_open_ci_button(urls, button_text, color_hex, project_name="PyCUT"):
+    """เปิด URL ใน new tab — ใช้ <a> tags ใน st.markdown() แทน components.html()
+    เพราะ components.html() render ใน sandboxed iframe และ window.open() ถูก block
+    """
     valid_urls = [u for u in urls if str(u).startswith('http')]
-    if not valid_urls: return
+    if not valid_urls:
+        return
     total = len(valid_urls)
-    safe_project_name = project_name.replace("'", "\\'").replace('"', '\\"')
 
-    if total <= MAX_OPEN_TABS:
-        js_links = " ".join([f"setTimeout(() => window.open('{u}', '_blank'), {i*400});" for i, u in enumerate(valid_urls)])
-        js_code = f"navigator.clipboard.writeText('{safe_project_name}'); {js_links}"
-        html = f"""
-        <button onclick="{js_code}"
-        style="padding: 10px 15px; background-color: #1a1e26; color: {color_hex};
-        border: 1px solid {color_hex}; border-radius: 8px; cursor: pointer; font-weight: bold;
-        width: 100%; margin-bottom: 8px; font-family: 'IBM Plex Sans Thai', sans-serif; transition: background-color 0.15s;"
-        onmouseover="this.style.backgroundColor='{color_hex}22'"
-        onmouseout="this.style.backgroundColor='#1a1e26'">
-        🚀 {button_text} ({total} แท็บ)
-        </button>
-        """
-        components.html(html, height=55)
+    _link_style = (
+        f"display:inline-block;padding:7px 12px;background:#1a1e26;color:{color_hex};"
+        f"border:1px solid {color_hex};border-radius:8px;font-weight:bold;"
+        f"text-decoration:none;font-family:'IBM Plex Sans Thai',sans-serif;"
+        f"font-size:13px;margin:0 4px 6px 0;transition:background .15s;"
+    )
+
+    if total == 1:
+        st.markdown(
+            f'<a href="{valid_urls[0]}" target="_blank" rel="noopener noreferrer" style="{_link_style}width:calc(100% - 8px);text-align:center;display:block;">'
+            f'🚀 {button_text}</a>',
+            unsafe_allow_html=True,
+        )
     else:
-        batches = [valid_urls[i:i+MAX_OPEN_TABS] for i in range(0, total, MAX_OPEN_TABS)]
-        n = len(batches)
-        safe_key = re.sub(r'[^\w]', '_', button_text + '_' + project_name[:15])[:40]
-
-        buttons_html = ""
-        restore_js_parts = []
-        for i, batch in enumerate(batches):
-            start = i * MAX_OPEN_TABS + 1
-            end = start + len(batch) - 1
-            lbl = f"{start}–{end}"
-            sk = f"pycut_{safe_key}_{i}"
-            js_links = " ".join([f"setTimeout(()=>window.open('{u}','_blank'),{j*400});" for j, u in enumerate(batch)])
-            js_click = (
-                f"navigator.clipboard.writeText('{safe_project_name}');"
-                f"{js_links}"
-                f"localStorage.setItem('{sk}','1');"
-                f"this.classList.add('opened');"
-                f"this.querySelector('.lbl').textContent='✅ {lbl}';"
-            )
-            buttons_html += (
-                f'<button id="b{i}" class="batch-btn" onclick="{js_click}">'
-                f'<span class="lbl">🚀 {lbl}</span>'
-                f'</button>'
-            )
-            restore_js_parts.append(
-                f"if(localStorage.getItem('{sk}')){{var b=document.getElementById('b{i}');"
-                f"if(b){{b.classList.add('opened');b.querySelector('.lbl').textContent='✅ {lbl}';}}}}"
-            )
-
-        restore_js = "\n".join(restore_js_parts)
-        height = 30 + ((n + 4) // 5) * 44
-
-        html = f"""
-        <style>
-        .batch-btn{{padding:7px 11px;background:#1a1e26;color:{color_hex};border:1px solid {color_hex};
-        border-radius:8px;cursor:pointer;font-weight:bold;font-family:'IBM Plex Sans Thai',sans-serif;
-        font-size:12px;transition:all .15s;margin:0 4px 6px 0;}}
-        .batch-btn:hover{{background:{color_hex}22;}}
-        .batch-btn.opened{{background:{color_hex}18;opacity:.5;border-style:dashed;cursor:default;}}
-        .bh{{color:{color_hex}99;font-family:'IBM Plex Sans Thai',sans-serif;font-size:11px;margin-bottom:4px;}}
-        </style>
-        <div class="bh">🚀 {button_text} — {total} รายการ · {n} ชุด</div>
-        <div style="display:flex;flex-wrap:wrap;">{buttons_html}</div>
-        <script>(function(){{{restore_js}}})();</script>
-        """
-        components.html(html, height=height)
+        links = "".join(
+            f'<a href="{u}" target="_blank" rel="noopener noreferrer" style="{_link_style}">🚀 {i+1}</a>'
+            for i, u in enumerate(valid_urls)
+        )
+        st.markdown(
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:10px;color:{color_hex}99;margin-bottom:4px;">'
+            f'🚀 {button_text} — {total} รายการ</div>'
+            f'<div style="display:flex;flex-wrap:wrap;margin-bottom:6px;">{links}</div>',
+            unsafe_allow_html=True,
+        )
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1397,6 +1679,7 @@ def watchdog_loop(
     is_vertical: bool = False,
     srt_save_path: str | None = None,
     pad_cut: bool = True,
+    do_srt: bool = True,
 ):
     """สแกน watch_folder ทุก 2 วิ — match ชื่อไฟล์ที่มี stock code → ตัด → output_folder
     pending = { stock_code: [ {row_key, row_idx, tc_in, tc_out, sot, sot_sentences}, ... ] }
@@ -1428,6 +1711,8 @@ def watchdog_loop(
                     break
             if not matched_file:
                 continue
+            # บันทึกชื่อไฟล์ที่เจอให้ UI แสดงสีเขียว
+            result_holder.setdefault("matched_stock", {})[code] = matched_file
             src = os.path.join(watch_folder, matched_file)
             ext = os.path.splitext(matched_file)[1].lower()
 
@@ -1446,13 +1731,24 @@ def watchdog_loop(
             all_done = True
             for info in info_list:
                 orig_stem = os.path.splitext(matched_file)[0]
-                cut_dir = info.get("insert_out_dir") if info.get("is_insert") else os.path.join(output_folder, "Cut Footages")
-                os.makedirs(cut_dir, exist_ok=True)
-                if info.get("is_insert"):
+                _is_insert = info.get("is_insert")
+
+                if _is_insert:
+                    # Insert → Insert Footages folder, ไม่มีเลข prefix
+                    cut_dir = info.get("insert_out_dir") or os.path.join(output_folder, "Insert Footages")
+                    os.makedirs(cut_dir, exist_ok=True)
                     out_path = _unique_cut_path(cut_dir, f"{orig_stem}{ext}")
-                else:
+                elif cut_by_tc:
+                    # ตัด TC → Cut Footages + เลข prefix
+                    cut_dir = os.path.join(output_folder, "Cut Footages")
+                    os.makedirs(cut_dir, exist_ok=True)
                     _cut_n = info.get("cut_idx", info["row_idx"])
                     out_path = _unique_cut_path(cut_dir, f"{_cut_n:02d}_{orig_stem}.mp4")
+                else:
+                    # ไม่ตัด TC → ไฟล์ raw copy ที่ stock_dir คือ out_path แล้ว ไม่ใส่เลข
+                    _sdir = info.get("stock_dir") or os.path.join(output_folder, "Raw Footages")
+                    out_path = os.path.join(_sdir, matched_file)
+
                 out_name = os.path.basename(out_path)
                 try:
                     if cut_by_tc and (info["tc_in"] is not None or info["tc_out"] is not None):
@@ -1464,25 +1760,31 @@ def watchdog_loop(
                             log.append(f"  ❌ watchdog cut ล้มเหลว: row{info['row_idx']}")
                             status_ref[info["row_key"]] = "error"
                             continue
-                    else:
+                    elif not os.path.exists(out_path):
+                        # Insert หรือ no-TC: copy ถ้ายังไม่มีไฟล์
                         shutil.copy(src, out_path)
                     status_ref[info["row_key"]] = "done"
-                    log.append(f"  ✅ watchdog ตัด: {matched_file} → {out_name}")
+                    log.append(f"  ✅ watchdog: {matched_file} → {out_name}")
 
-                    # ── SOT timing: Gemini Audio ──
-                    if info.get("sot") and info.get("sot_sentences") and gclient and os.path.exists(out_path):
-                        log.append(f"  🎙️ วิเคราะห์ SOT timing row {info['row_idx']}...")
-                        audio_mp3 = _extract_audio_clip(out_path, fmt="mp3")
-                        if audio_mp3:
-                            timing = _analyze_sot_timing(audio_mp3, info["sot_sentences"], gclient, log)
+                    # ── SOT timing: Whisper → Gemini (single-item batch) ──
+                    if do_srt and info.get("sot") and info.get("sot_sentences") and os.path.exists(out_path):
+                        log.append(f"  🎙️ SOT timing watchdog row {info['row_idx']}...")
+                        _wtc_in  = info["tc_in"]  if not cut_by_tc else None
+                        _wtc_out = info["tc_out"] if not cut_by_tc else None
+                        wav_path = _extract_audio_clip(out_path, fmt="wav", tc_in=_wtc_in, tc_out=_wtc_out)
+                        if wav_path:
+                            words_w, speech_ev, clean_segs = _whisper_sot_words(wav_path, log)
                             try:
-                                os.remove(audio_mp3)
+                                os.remove(wav_path)
                             except Exception:
                                 pass
-                            if timing:
-                                rk = info["row_key"]
-                                if rk in row_index:
-                                    row_index[rk]["sot_timestamps"] = timing
+                            rk = info["row_key"]
+                            if rk in row_index:
+                                _tmp = row_index[rk]
+                                _tmp["_sot_whisper"] = {"words": words_w, "events": speech_ev, "segs": clean_segs}
+                                _tmp["bullets"] = info["sot_sentences"]
+                                _batch_sot_gemini([_tmp], log)
+                                _tmp.pop("_sot_whisper", None)
 
                 except Exception as e:
                     all_done = False
@@ -1494,18 +1796,18 @@ def watchdog_loop(
             pending.pop(c, None)
 
         if not pending:
-            # ── Rebuild SRT ถ้ามี SOT timestamps ใหม่ ──
-            if parsed_rows and any(r.get("sot_timestamps") for r in parsed_rows):
-                log.append("  🔄 Rebuild SRT พร้อม SOT timestamps...")
+            # ── Build SRT หลัง watchdog เสร็จ (กรอง insert rows ออก) ──
+            if parsed_rows and srt_save_path:
+                log.append("  🔄 Build SRT หลัง Watchdog เสร็จ...")
                 try:
-                    new_srt = build_srt(parsed_rows, is_vertical, gclient)
+                    srt_rows = [r for r in parsed_rows if not r.get("is_insert")]
+                    new_srt = build_srt(srt_rows, is_vertical, gclient)
                     result_holder["srt_content"] = new_srt
-                    if srt_save_path:
-                        with open(srt_save_path, "w", encoding="utf-8-sig", newline="") as f:
-                            f.write(new_srt)
-                        log.append(f"  ✅ SRT อัปเดต → {srt_save_path}")
+                    with open(srt_save_path, "w", encoding="utf-8-sig", newline="") as f:
+                        f.write(new_srt)
+                    log.append(f"  ✅ SRT บันทึก → {srt_save_path}")
                 except Exception as e:
-                    log.append(f"  ⚠️ Rebuild SRT error: {e}")
+                    log.append(f"  ⚠️ Build SRT error: {e}")
 
             stop_event.set()
             result_holder["done"] = True
@@ -1517,6 +1819,196 @@ def watchdog_loop(
 # ──────────────────────────────────────────────────────────────
 # RUN ORCHESTRATOR
 # ──────────────────────────────────────────────────────────────
+def _whisper_sot_words(audio_path: str, log: list) -> tuple[list[dict], list[tuple], list[dict]]:
+    """รัน mlx-whisper → คืน (words_with_text, speech_events, clean_segs)
+    words_with_text: [{w, s, e}, ...] สำหรับ char-proportional fallback
+    speech_events:   [(s, e), ...]
+    clean_segs:      [{s, e, text}, ...] สำหรับ Gemini prompt (อ่านความหมายได้)
+    """
+    if FFMPEG_EXE and os.path.isabs(FFMPEG_EXE):
+        _ff_dir = os.path.dirname(FFMPEG_EXE)
+        if _ff_dir and _ff_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = _ff_dir + os.pathsep + os.environ.get("PATH", "")
+
+    file_dur = _get_audio_duration(audio_path)
+
+    try:
+        import mlx_whisper
+        result = mlx_whisper.transcribe(
+            audio_path,
+            path_or_hf_repo=_MLX_WHISPER_REPO,
+            word_timestamps=True,
+            language=None,
+        )
+        segs = result.get("segments", [])
+        lang = result.get("language", "?")
+        words_w: list[dict] = []
+        speech_ev: list[tuple] = []
+        clean_segs: list[dict] = []
+        for seg in segs:
+            s = max(seg["start"], 0.0)
+            e = seg["end"]
+            if file_dur > 0:
+                e = min(e, file_dur)
+            txt = seg.get("text", "").strip()
+            if e - s >= 0.1 and txt:
+                clean_segs.append({"s": round(s, 2), "e": round(e, 2), "text": txt})
+            for w in seg.get("words", []):
+                ws = max(w.get("start", seg["start"]), 0.0)
+                we = w.get("end", seg.get("end", ws + 0.1))
+                if file_dur > 0:
+                    we = min(we, file_dur)
+                wtext = w.get("word", "").strip()
+                if we - ws >= 0.02 and wtext:
+                    words_w.append({"w": wtext, "s": round(ws, 2), "e": round(we, 2)})
+                    speech_ev.append((ws, we))
+        if not speech_ev:
+            for seg in segs:
+                s = max(seg["start"], 0.0)
+                e = min(seg["end"], file_dur) if file_dur > 0 else seg["end"]
+                if e - s >= 0.2:
+                    speech_ev.append((s, e))
+        log.append(f"    🔊 lang={lang} | {len(words_w)} words | {len(clean_segs)} segs")
+        return words_w, speech_ev, clean_segs
+    except ImportError:
+        log.append("    ⚠️ mlx-whisper ไม่ได้ติดตั้ง")
+    except Exception as e:
+        log.append(f"    ⚠️ Whisper error: {e}")
+
+    # file_dur fallback
+    if file_dur > 0:
+        return [], [(0.0, file_dur)], []
+    return [], [], []
+
+
+def _batch_sot_gemini(sot_rows: list[dict], log: list):
+    """Gemini batch segment-align — 1 API call สำหรับทุก SOT row
+    ส่ง segments (text เต็ม) แทน words → Gemini อ่านความหมายได้ → timestamps แม่นขึ้น
+    อ่าน row["_sot_whisper"] → เขียน row["sot_timestamps"] กลับเข้า row
+    """
+    import json as _json
+
+    items = [r for r in sot_rows if r.get("_sot_whisper") and r.get("bullets")]
+    if not items:
+        return
+
+    # ── build batched prompt ใช้ segments (มี text เต็ม) แทน words ──
+    parts = []
+    for i, row in enumerate(items):
+        segs = row["_sot_whisper"].get("segs", [])
+        subs = row["bullets"]
+        if not segs:
+            continue
+        seg_json  = _json.dumps(segs, ensure_ascii=False, separators=(",", ":"))
+        thai_list = "\n".join(f"{j+1}.{s}" for j, s in enumerate(subs))
+        parts.append(
+            f"Clip {i} English segments (s=start, e=end, text=spoken):\n{seg_json}\n"
+            f"Clip {i} Thai subtitles (translation, in order):\n{thai_list}"
+        )
+
+    if not parts:
+        _batch_sot_fallback(items, log)
+        return
+
+    prompt = (
+        "\n\n".join(parts) + "\n\n"
+        "For each clip and each Thai subtitle (1-based idx), "
+        "find the start/end time (seconds) of the corresponding English speech.\n"
+        "Return ONLY JSON array:\n"
+        '[{"clip":0,"alignments":[{"idx":1,"start":0.0,"end":3.5},{"idx":2,"start":3.6,"end":7.2}]},'
+        '{"clip":1,"alignments":[{"idx":1,"start":0.0,"end":4.1}]}]'
+    )
+    log.append(f"  🤖 Gemini batch SOT: {len(items)} clips | prompt {len(prompt)} chars")
+
+    keys = _gemini_keys()
+    if not keys:
+        _batch_sot_fallback(items, log)
+        return
+
+    _n = len(keys)
+    _ordered = [keys[(_gemini_key_idx[0] + i) % _n] for i in range(_n)]
+
+    for model, api_ver in _TEXT_ALIGN_MODELS:
+        for key in _ordered:
+            try:
+                c = genai.Client(api_key=key, http_options={"api_version": api_ver})
+                resp = c.models.generate_content(model=model, contents=[prompt])
+                raw = resp.text.strip()
+                _arr = _extract_json_array(raw)
+                if not _arr:
+                    log.append(f"  ⚠️ {model}: ไม่พบ JSON")
+                    continue
+                data = _json.loads(_arr)
+                success_count = 0
+                for clip_data in data:
+                    ci = clip_data.get("clip", 0)
+                    if ci >= len(items):
+                        continue
+                    row  = items[ci]
+                    subs = row["bullets"]
+                    als  = sorted(clip_data.get("alignments", []), key=lambda x: x.get("idx", 0))
+                    timings: list[tuple[float, float]] = []
+                    for al in als[:len(subs)]:
+                        ts = float(al.get("start", 0.0))
+                        te = float(al.get("end", ts + 2.0))
+                        te = max(ts + 0.3, te)
+                        timings.append((ts, te))
+                    while len(timings) < len(subs):
+                        last = timings[-1][1] if timings else 0.0
+                        timings.append((last + 0.2, last + 2.2))
+                    row["sot_timestamps"] = timings[:len(subs)]
+                    success_count += 1
+                log.append(f"  ✅ batch SOT: {success_count}/{len(items)} clips ← {model}")
+                _batch_sot_fallback([r for r in items if "sot_timestamps" not in r], log)
+                return
+            except Exception as _e:
+                err_str = str(_e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    _gemini_key_idx[0] = (_gemini_key_idx[0] + 1) % _n
+                    log.append(f"  ↩ {model} quota หมด — rotate key")
+                    continue
+                log.append(f"  ⚠️ {model}: {err_str[:100]}")
+                break
+
+    log.append("  ⚠️ batch SOT Gemini ล้มเหลว — char-proportional fallback")
+    _batch_sot_fallback(items, log)
+
+
+def _batch_sot_fallback(rows: list[dict], log: list):
+    """char-proportional fallback สำหรับ SOT rows ที่ Gemini ไม่สำเร็จ"""
+    for row in rows:
+        if "sot_timestamps" in row:
+            continue
+        sot_data = row.get("_sot_whisper", {})
+        speech_ev = sot_data.get("events", [])
+        subs = row.get("bullets", [])
+        if not subs:
+            continue
+        if not speech_ev:
+            file_dur_fb = 5.0 * len(subs)
+            speech_ev = [(0.0, file_dur_fb)]
+        total = sum(e - s for s, e in speech_ev)
+
+        def _p2t(pos, evs=speech_ev):
+            acc = 0.0
+            for s, e in evs:
+                d = e - s
+                if pos <= acc + d:
+                    return s + (pos - acc)
+                acc += d
+            return evs[-1][1]
+
+        total_chars = sum(len(s) for s in subs) or len(subs)
+        acc = 0
+        timings = []
+        for s in subs:
+            t0 = _p2t(total * acc / total_chars)
+            acc += len(s)
+            t1 = max(t0 + 0.3, _p2t(total * acc / total_chars))
+            timings.append((t0, t1))
+        row["sot_timestamps"] = timings
+
+
 def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_folder: str, status_ref: dict, result_holder: dict):
     """Thread target — ห้ามแตะ st.session_state โดยตรง ใช้ status_ref / result_holder แทน"""
     is_vertical = settings["is_vertical"]
@@ -1541,16 +2033,14 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
         srt_path = os.path.join(output_folder, f"{title_safe}.srt")
 
         # สร้าง subfolders
-        raw_folder   = os.path.join(output_folder, "Raw Footages")
-        cut_folder   = os.path.join(output_folder, "Cut Footages")
-        raw_drive    = os.path.join(raw_folder, "Drive")
-        raw_social   = os.path.join(raw_folder, "Social")
-        raw_others   = os.path.join(raw_folder, "Others")
-        raw_getty    = os.path.join(raw_folder, "Getty")
-        raw_reuters  = os.path.join(raw_folder, "Reuters")
-        raw_images   = os.path.join(raw_folder, "Images")
-        for _d in [raw_folder, cut_folder, raw_drive, raw_social, raw_others, raw_getty, raw_reuters, raw_images]:
-            os.makedirs(_d, exist_ok=True)
+        raw_folder = os.path.join(output_folder, "Raw Footages")
+        os.makedirs(raw_folder, exist_ok=True)
+        if cut_by_tc:
+            cut_folder = os.path.join(output_folder, "Cut Footages")
+            os.makedirs(cut_folder, exist_ok=True)
+        else:
+            cut_folder = raw_folder
+        raw_drive = raw_social = raw_others = raw_getty = raw_reuters = raw_images = raw_folder
 
         def _save_srt():
             """Build + save SRT — เรียกหลัง Drive SOT timestamps พร้อมแล้ว"""
@@ -1573,7 +2063,17 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                 log.append(f"  ⚠️ บันทึก SRT ล้มเหลว: {e}")
 
         # Footage
-        insert_folder = os.path.join(output_folder, "Insert Footages")
+        _has_insert = any(r.get("is_insert") for r in parsed["rows"])
+        if _has_insert:
+            insert_folder   = os.path.join(output_folder, "Insert Footages")
+            insert_drive    = os.path.join(insert_folder, "Drive")
+            insert_social   = os.path.join(insert_folder, "Social")
+            insert_others   = os.path.join(insert_folder, "Others")
+            insert_getty    = os.path.join(insert_folder, "Getty")
+            insert_reuters  = os.path.join(insert_folder, "Reuters")
+            insert_images   = os.path.join(insert_folder, "Images")
+        else:
+            insert_folder = insert_drive = insert_social = insert_others = insert_getty = insert_reuters = insert_images = None
         stock_pending = {}
         main_idx = 0
         for row in parsed["rows"]:
@@ -1609,7 +2109,7 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                     })
                     log.append(f"    ⚠️ รอผู้ใช้เปลี่ยน link เป็นไฟล์เดียว")
                 elif raw and os.path.exists(raw):
-                    raw = _do_cut_and_sot(raw, main_idx, row, cut_folder, cut_by_tc, pad_cut, gclient, log, status_ref, key, _set_status)
+                    raw = _do_cut_and_sot(raw, main_idx, row, cut_folder, cut_by_tc, pad_cut, gclient, log, status_ref, key, _set_status, do_srt=do_srt)
                     if raw:
                         status_ref[key] = "done"
                 else:
@@ -1625,7 +2125,7 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                 _set_status(f"⬇️  #{idx:02d} — กำลังโหลด ({src_tag})...")
                 raw = download_social(url, src_dir, log, status_cb=_set_status)
                 if raw and os.path.exists(raw):
-                    raw = _do_cut_and_sot(raw, main_idx, row, cut_folder, cut_by_tc, pad_cut, gclient, log, status_ref, key, _set_status)
+                    raw = _do_cut_and_sot(raw, main_idx, row, cut_folder, cut_by_tc, pad_cut, gclient, log, status_ref, key, _set_status, do_srt=do_srt)
                     if raw:
                         status_ref[key] = "done"
                 else:
@@ -1639,12 +2139,14 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                 _set_status(f"⬇️  #{idx:02d} — กำลังโหลดภาพ...")
                 raw = download_image_url(url, raw_images, log)
                 if raw and os.path.exists(raw):
-                    # copy ไปยัง Cut Footages พร้อม index prefix
-                    img_ext = os.path.splitext(raw)[1]
-                    orig_stem = os.path.splitext(os.path.basename(raw))[0]
-                    cut_img = _unique_cut_path(cut_folder, f"{main_idx:02d}_{orig_stem}{img_ext}")
-                    shutil.copy2(raw, cut_img)
-                    log.append(f"    → ภาพ → Cut Footages: {os.path.basename(cut_img)}")
+                    if cut_by_tc:
+                        img_ext = os.path.splitext(raw)[1]
+                        orig_stem = os.path.splitext(os.path.basename(raw))[0]
+                        cut_img = _unique_cut_path(cut_folder, f"{main_idx:02d}_{orig_stem}{img_ext}")
+                        shutil.copy2(raw, cut_img)
+                        log.append(f"    → ภาพ → Cut Footages: {os.path.basename(cut_img)}")
+                    else:
+                        log.append(f"    → ภาพ: {os.path.basename(raw)}")
                     status_ref[key] = "done"
                 else:
                     log.append(f"    ❌ โหลดภาพล้มเหลว")
@@ -1673,13 +2175,27 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
 
         log.append(f"  stock_pending: {list(stock_pending.keys())}")
 
-        # SRT: build หลัง Drive rows ทั้งหมดเสร็จ (มี SOT timestamps แล้ว)
-        _save_srt()
+        # ── Batch Gemini SOT timing (1 call สำหรับทุก row) ──
+        if do_srt:
+            _sot_pending = [r for r in parsed["rows"] if r.get("_sot_whisper") and r.get("sot") and r.get("bullets")]
+            if _sot_pending:
+                _set_status(f"🤖  Gemini SOT batch ({len(_sot_pending)} clips)...")
+                _batch_sot_gemini(_sot_pending, log)
+            for r in parsed["rows"]:
+                r.pop("_sot_whisper", None)  # clean up temp key
+
+        # SRT: build หลัง Drive rows เสร็จ เฉพาะกรณีไม่มี stock pending
+        # ถ้ามี stock → รอ watchdog ตัดแล้วค่อย build (เพื่อให้ SOT timing ถูก)
+        if not stock_pending:
+            _save_srt()
+        else:
+            log.append(f"  ⏳ มี stock {len(stock_pending)} รายการ — SRT จะ build หลัง watchdog เสร็จ")
 
         # ── Insert rows: download-only ไปยัง Insert Footages (ไม่ตัด TC) ──
         _insert_rows = [r for r in parsed["rows"] if r.get("is_insert")]
-        if _insert_rows and do_dl:
-            os.makedirs(insert_folder, exist_ok=True)
+        if _insert_rows and do_dl and insert_folder:
+            for _d in [insert_folder, insert_drive, insert_social, insert_others, insert_getty, insert_reuters, insert_images]:
+                os.makedirs(_d, exist_ok=True)
             log.append(f"  📌 Insert rows: {len(_insert_rows)} รายการ")
             for row in _insert_rows:
                 idx = row["index"]
@@ -1689,7 +2205,7 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                 if ft == "drive" and row["file_id"]:
                     status_ref[key] = "downloading"
                     _set_status(f"⬇️  INSERT #{idx:02d} — Drive...")
-                    raw = download_drive_file(drive_svc, row["file_id"], idx, insert_folder, log, status_cb=_set_status)
+                    raw = download_drive_file(drive_svc, row["file_id"], idx, insert_drive, log, status_cb=_set_status)
                     if isinstance(raw, dict) and raw.get("conflict"):
                         status_ref[key] = "folder_conflict"
                         result_holder.setdefault("folder_conflicts", []).append({
@@ -1704,17 +2220,19 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                 elif ft in ("social", "other") and row["footage_raw"].strip():
                     url = row["footage_raw"].strip()
                     src_tag = get_source_tag(url)
+                    src_dir = insert_social if ft == "social" else insert_others
                     status_ref[key] = "downloading"
                     _set_status(f"⬇️  INSERT #{idx:02d} — {src_tag}...")
-                    raw = download_social(url, insert_folder, log, status_cb=_set_status)
+                    raw = download_social(url, src_dir, log, status_cb=_set_status)
                     status_ref[key] = "done" if (raw and os.path.exists(raw)) else "error"
                 elif ft == "image" and row["footage_raw"].strip():
                     status_ref[key] = "downloading"
                     _set_status(f"⬇️  INSERT #{idx:02d} — ภาพ...")
-                    raw = download_image_url(row["footage_raw"].strip(), insert_folder, log)
+                    raw = download_image_url(row["footage_raw"].strip(), insert_images, log)
                     status_ref[key] = "done" if (raw and os.path.exists(raw)) else "error"
                 elif ft in ("getty", "reuters") and row["footage_raw"].strip():
                     status_ref[key] = "waiting_stock"
+                    _ins_dir = insert_getty if ft == "getty" else insert_reuters
                     code = _extract_stock_code(row["footage_raw"], ft)
                     if code not in stock_pending:
                         stock_pending[code] = []
@@ -1722,9 +2240,9 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                         "row_key": key, "row_idx": idx,
                         "tc_in": None, "tc_out": None,
                         "sot": False, "sot_sentences": [],
-                        "stock_dir": raw_getty if ft == "getty" else raw_reuters,
+                        "stock_dir": _ins_dir,
                         "is_insert": True,
-                        "insert_out_dir": insert_folder,
+                        "insert_out_dir": _ins_dir,
                     })
                     log.append(f"    → รอ stock (insert/{ft}): {row['footage_raw'][:40]} (code={code})")
                 else:
@@ -1734,26 +2252,25 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
                 status_ref[str(row["index"])] = "skipped"
 
         # Watchdog สำหรับ stock
+        has_stock = bool(stock_pending)
         if stock_pending:
-            has_stock = True
-            stop_ev = threading.Event()
-            result_holder["watchdog_stop"] = stop_ev
             watch_src = stock_watch_folder if stock_watch_folder and os.path.isdir(stock_watch_folder) else output_folder
-            srt_save_path = srt_path
-            log.append(f"  🐕 watchdog เริ่ม — scan: {watch_src}")
-            _set_status(f"🐕  รอ Stock Footage  ({len(stock_pending)} รายการ)...")
-            threading.Thread(
-                target=watchdog_loop,
-                args=(watch_src, stock_pending, output_folder, stop_ev, cut_by_tc, status_ref, result_holder),
-                kwargs={
-                    "gclient": gclient,
-                    "parsed_rows": parsed["rows"],
-                    "is_vertical": is_vertical,
-                    "srt_save_path": srt_save_path,
-                    "pad_cut": pad_cut,
-                },
-                daemon=True,
-            ).start()
+            result_holder["stock_pending"] = stock_pending
+            result_holder["watchdog_params"] = {
+                "watch_src": watch_src,
+                "output_folder": output_folder,
+                "cut_by_tc": cut_by_tc,
+                "gclient": gclient,
+                "parsed_rows": parsed["rows"],
+                "is_vertical": is_vertical,
+                "srt_save_path": srt_path if do_srt else None,
+                "pad_cut": pad_cut,
+                "status_ref": status_ref,
+                "do_srt": do_srt,
+            }
+            log.append(f"  ⏳ stock pending {len(stock_pending)} รายการ — รอ watchdog")
+            _set_status(f"⏳  มี Stock {len(stock_pending)} รายการ — Watchdog กำลังเริ่ม...")
+            result_holder["auto_start_watchdog"] = True  # UI จะ auto-start watchdog thread
 
     except Exception as e:
         import traceback
@@ -1868,9 +2385,12 @@ with st.sidebar:
         st.warning("⚠️ กรุณาเลือก Output Folder")
 
     if st.session_state["pycut_running"]:
+        _sb_h = st.session_state.get("pycut_result_holder") or {}
+        _sb_wactive = _sb_h.get("watchdog_active", False)
+        _sb_color = "#ffd166" if _sb_wactive else "#ff7a2f"
         st.markdown(
-            "<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs,10px);color:#ff7a2f;"
-            "margin-bottom:8px;'>🔄 กำลังทำงาน...</div>",
+            f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs,10px);color:{_sb_color};"
+            f"margin-bottom:8px;'>{'🐕 Watchdog กำลังสแกน...' if _sb_wactive else '🔄 กำลังทำงาน...'}</div>",
             unsafe_allow_html=True,
         )
         if st.button("⏹ Stop", use_container_width=True):
@@ -1878,6 +2398,7 @@ with st.sidebar:
             if _h:
                 _ev = _h.get("watchdog_stop")
                 if _ev: _ev.set()
+                _h["watchdog_active"] = False
             st.session_state["pycut_running"] = False
             st.rerun()
     else:
@@ -1886,6 +2407,7 @@ with st.sidebar:
             _status_ref = {}
             _result_holder = {"srt_content": "", "error": "", "done": False, "watchdog_stop": None, "status_text": ""}
             st.session_state["pycut_running"] = True
+            st.session_state["pycut_run_id"] = st.session_state.get("pycut_run_id", 0) + 1
             st.session_state["pycut_row_status"] = _status_ref
             st.session_state["pycut_srt_content"] = ""
             st.session_state["pycut_srt_editor"] = ""
@@ -2078,6 +2600,129 @@ else:
                 unsafe_allow_html=True,
             )
 
+    # ── Pre-run Stock Footage section ──
+    _prerun_stock_rows = [r for r in parsed["rows"] if r["footage_type"] in ("getty", "reuters")]
+    if _prerun_stock_rows:
+        # สร้าง stock item list
+        _pr_items: list[dict] = []
+        _pr_seen: set = set()
+        for _sr in _prerun_stock_rows:
+            _ft = _sr["footage_type"]
+            _raw = _sr["footage_raw"].strip()
+            _sc = _extract_stock_code(_raw, _ft)
+            if not _sc or _sc in _pr_seen:
+                continue
+            _pr_seen.add(_sc)
+            _m_rw = re.search(r'\b((?:RW|RC)[A-Z0-9]+)\b', _raw, re.IGNORECASE) if _ft == "reuters" else None
+            _pr_items.append({
+                "ft": _ft,
+                "search_code": _sc,
+                "display_code": _m_rw.group(1).upper() if _m_rw else _sc,
+            })
+
+        _prewd_on = st.session_state.get("pycut_prewd_on", False)
+        _watch_src = st.session_state.get("pycut_stock_watch_folder") or st.session_state.get("pycut_output_folder") or ""
+
+        # สแกนถ้า watchdog เปิด
+        if _prewd_on and _watch_src:
+            st.session_state["pycut_prewd_found"] = _prewd_scan(_watch_src, _pr_items)
+        _pr_found = st.session_state.get("pycut_prewd_found", {})
+        _all_found = bool(_pr_items) and all(_pr_found.get(i["search_code"]) for i in _pr_items)
+
+        # ── Header + path/status (full-width) ──
+        st.markdown('<div class="pc-step">📦 Stock Footage</div>', unsafe_allow_html=True)
+        if _all_found:
+            _pr_sc, _pr_st = "#2dd4a8", "✅ ครบแล้ว — พร้อม Run PyCUT"
+        elif _prewd_on:
+            _pr_sc, _pr_st = "#ffd166", "🐕 Watchdog กำลังสแกน..."
+        else:
+            _pr_sc, _pr_st = "#8b90a0", "ดาวน์โหลด Stock แล้ววางใน Watch Folder"
+        st.markdown(
+            f"<div style='font-family:IBM Plex Mono,monospace;font-size:10px;color:#555a6a;"
+            f"margin-bottom:2px;'>📂 {_watch_src or '—'}</div>"
+            f"<div style='font-family:IBM Plex Mono,monospace;font-size:11px;"
+            f"color:{_pr_sc};margin-bottom:4px;'>{_pr_st}</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Toggle ขวาสุด — เหมือน PyRUSH: spacer เปล่า [8] + toggle [1] ──
+        _, _pr_tog_col = st.columns([8, 1])
+        with _pr_tog_col:
+            _new_prewd = st.toggle(
+                "🐕 Watchdog",
+                value=_prewd_on,
+                key="prewd_toggle",
+                disabled=not bool(_watch_src),
+                help="เปิดเพื่อสแกน Watch Folder ทุก 2 วิ",
+            )
+            if _new_prewd != _prewd_on:
+                st.session_state["pycut_prewd_on"] = _new_prewd
+                if not _new_prewd:
+                    st.session_state["pycut_prewd_found"] = {}
+                st.rerun()
+
+        # ── Getty | Reuters — PyLOAD pattern: st.columns ตรงๆ ไม่มี HTML wrapper ──
+        _pr_gi = [i for i in _pr_items if i["ft"] == "getty"]
+        _pr_ri = [i for i in _pr_items if i["ft"] == "reuters"]
+        _pr_col_g, _pr_col_r = st.columns(2, gap="medium")
+
+        def _render_stock_col(col, items, top_color, header_label, url_fn):
+            with col:
+                _n_found = sum(1 for it in items if _pr_found.get(it["search_code"]))
+                _n_total = len(items)
+                if _n_total == 0:
+                    _badge = ""
+                elif _n_found == _n_total:
+                    _badge = ("<span style='background:rgba(45,212,168,.15);color:#2dd4a8;"
+                              "font-size:10px;padding:2px 8px;border-radius:20px;font-family:IBM Plex Mono,monospace;'>"
+                              "✅ ครบแล้ว</span>")
+                else:
+                    _badge = (f"<span style='background:rgba(255,77,77,.12);color:#ff4d4d;"
+                               f"font-size:10px;padding:2px 8px;border-radius:20px;font-family:IBM Plex Mono,monospace;'>"
+                               f"{_n_total - _n_found} ต้องโหลด</span>")
+
+                st.markdown(
+                    f"<div style='background:#13161b;border:1px solid rgba(255,255,255,0.08);"
+                    f"border-top:2px solid {top_color};border-radius:10px;padding:14px;"
+                    f"margin-bottom:10px;'>"
+                    f"<div style='font-family:IBM Plex Mono,monospace;font-size:11px;"
+                    f"color:{top_color};font-weight:600;'>{header_label} {_badge}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                if not items:
+                    st.markdown("<span style='font-family:IBM Plex Mono,monospace;font-size:12px;color:#555a6a;'>ไม่มี</span>",
+                                unsafe_allow_html=True)
+                    return
+
+                # ไฟล์ที่เจอแล้ว (แสดง ✅ + ชื่อไฟล์)
+                _found_items = [(it["display_code"], _pr_found[it["search_code"]])
+                                for it in items if _pr_found.get(it["search_code"])]
+                if _found_items:
+                    for _code, _fname in _found_items:
+                        st.markdown(
+                            f"<div style='font-family:IBM Plex Mono,monospace;font-size:12px;"
+                            f"color:#2dd4a8;padding:2px 0;'>✅ {_fname}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                # โค้ดที่ยังไม่เจอ → st.code() มีปุ่ม copy
+                _unfound = [it["display_code"] for it in items if not _pr_found.get(it["search_code"])]
+                if _unfound:
+                    st.code("\n".join(_unfound), language="text")
+                    make_open_ci_button(
+                        [url_fn(c) for c in _unfound],
+                        f"เปิด Tab {header_label.split()[-1]} ทั้งหมด",
+                        top_color,
+                        parsed.get("title", "PyCUT"),
+                    )
+
+        _render_stock_col(_pr_col_g, _pr_gi, "#ffd166", "🖼 Getty Images",
+                          lambda c: f"https://www.gettyimages.com/search/2/film?phrase={c}&family=editorial&sort=best")
+        _render_stock_col(_pr_col_r, _pr_ri, "#ff7a2f", "📡 Reuters Connect",
+                          lambda c: f"https://www.reutersconnect.com/all?search=all%3A{c}")
+
     # ── Progress + Status ──
     has_results = any(
         v not in ("pending", "")
@@ -2091,7 +2736,9 @@ else:
         _err_txt = (_holder or {}).get("error", "") or st.session_state.get("pycut_error", "")
 
         if _total > 0:
-            st.progress(_done_n / _total)
+            # cap ที่ 90% ขณะยังทำงานอยู่ (Gemini batch / SRT อาจยังไม่เสร็จหลัง rows done)
+            _prog = min(_done_n / _total, 0.9) if st.session_state.get("pycut_running") else _done_n / _total
+            st.progress(_prog)
 
         if _err_txt:
             st.markdown(
@@ -2143,69 +2790,89 @@ else:
                 )
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Stock section
-        stock_rows = [
-            r for r in parsed["rows"]
-            if st.session_state["pycut_row_status"].get(str(r["index"])) == "waiting_stock"
-        ]
-        if stock_rows:
-            watch_dir = st.session_state.get("pycut_stock_watch_folder") or st.session_state.get("pycut_output_folder") or ""
-            proj_title = parsed.get("title", "PyCUT")
+        # ── In-run Watchdog (copy+cut stock หลัง run_pycut เสร็จ) ──
+        _wparams = (_holder or {}).get("watchdog_params", {})
+        _wpending = (_holder or {}).get("stock_pending")
+        _wactive  = (_holder or {}).get("watchdog_active", False)
 
-            getty_codes, reuters_codes = [], []
-            seen_getty, seen_reuters = set(), set()
-            for sr in stock_rows:
-                ft = sr["footage_type"]
-                code = _extract_stock_code(sr["footage_raw"], ft)
-                if not code:
-                    continue
-                if ft == "getty" and code not in seen_getty:
-                    getty_codes.append(code); seen_getty.add(code)
-                elif ft == "reuters" and code not in seen_reuters:
-                    reuters_codes.append(code); seen_reuters.add(code)
+        # Auto-start watchdog เมื่อ run_pycut ส่ง signal
+        if (_holder or {}).get("auto_start_watchdog") and _wparams and _wpending and not _wactive:
+            _holder["auto_start_watchdog"] = False
+            _p = _wparams
+            _stop_ev = threading.Event()
+            _holder["watchdog_stop"] = _stop_ev
+            _holder["watchdog_active"] = True
+            _holder.pop("done", None)
+            _holder["error"] = ""
+            _sp = _holder.pop("stock_pending")
+            st.session_state["pycut_running"] = True
+            threading.Thread(
+                target=watchdog_loop,
+                args=(_p["watch_src"], _sp, _p["output_folder"],
+                      _stop_ev, _p["cut_by_tc"], _p["status_ref"], _holder),
+                kwargs={
+                    "gclient": _p["gclient"],
+                    "parsed_rows": _p["parsed_rows"],
+                    "is_vertical": _p["is_vertical"],
+                    "srt_save_path": _p["srt_save_path"],
+                    "pad_cut": _p["pad_cut"],
+                    "do_srt": _p.get("do_srt", True),
+                },
+                daemon=True,
+            ).start()
+            st.rerun()
 
-            st.markdown(
-                "<div style='background:#13161b;border:1px solid rgba(255,255,255,0.08);"
-                "border-top:2px solid #ffd166;border-radius:12px;padding:16px;margin-bottom:16px;'>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#ffd166;font-weight:600;margin-bottom:2px;'>⏳ รอ Stock Footage</div>"
-                f"<div style='font-family:IBM Plex Mono,monospace;font-size:10px;color:#555a6a;margin-bottom:12px;'>"
-                f"🐕 Watchdog สแกน: <b style='color:#8b90a0;'>{watch_dir or '—'}</b></div>",
-                unsafe_allow_html=True,
-            )
-
-            _col_l, _col_r = st.columns(2)
-            with _col_l:
+        # แสดง watchdog control เฉพาะเมื่อ active หรือ pending
+        if _wactive or _wpending:
+            _wstatus_col, _wbtn_col = st.columns([4, 1])
+            with _wstatus_col:
+                _wc = "#ffd166" if _wactive else "#8b90a0"
+                _wt = "🐕 Watchdog กำลัง copy+cut Stock..." if _wactive else "⏳ รอ Watchdog เริ่ม..."
                 st.markdown(
-                    "<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#ffd166;font-weight:600;margin-bottom:8px;'>🖼 Getty Images</div>",
+                    f"<div style='font-family:IBM Plex Mono,monospace;font-size:12px;"
+                    f"color:{_wc};padding-top:6px;'>{_wt}</div>",
                     unsafe_allow_html=True,
                 )
-                if getty_codes:
-                    st.code("\n".join(getty_codes), language=None)
-                    make_open_ci_button(
-                        [f"https://www.gettyimages.com/search/2/film?phrase={c}&family=editorial&sort=best" for c in getty_codes],
-                        "เปิด Tab Getty ทั้งหมด", "#ffd166", proj_title,
-                    )
+            with _wbtn_col:
+                _can_wd = bool(_wparams and _wpending and not _wactive)
+                if _wactive:
+                    if st.button("⏹ Stop", use_container_width=True):
+                        _ev = (_holder or {}).get("watchdog_stop")
+                        if _ev: _ev.set()
+                        if _holder: _holder["watchdog_active"] = False
+                        st.session_state["pycut_running"] = False
+                        st.rerun()
                 else:
-                    st.markdown("<span style='font-family:IBM Plex Mono,monospace;font-size:12px;color:#555a6a;'>ไม่มี Getty</span>", unsafe_allow_html=True)
+                    if st.button("🐕 Watch", use_container_width=True, disabled=not _can_wd):
+                        if _holder and _wparams and _wpending:
+                            _stop_ev = threading.Event()
+                            _holder["watchdog_stop"] = _stop_ev
+                            _holder["watchdog_active"] = True
+                            _holder.pop("done", None)
+                            _holder["error"] = ""
+                            _sp = _holder.pop("stock_pending", _wpending)
+                            _p = _wparams
+                            st.session_state["pycut_running"] = True
+                            threading.Thread(
+                                target=watchdog_loop,
+                                args=(_p["watch_src"], _sp, _p["output_folder"],
+                                      _stop_ev, _p["cut_by_tc"], _p["status_ref"], _holder),
+                                kwargs={
+                                    "gclient": _p["gclient"],
+                                    "parsed_rows": _p["parsed_rows"],
+                                    "is_vertical": _p["is_vertical"],
+                                    "srt_save_path": _p["srt_save_path"],
+                                    "pad_cut": _p["pad_cut"],
+                                },
+                                daemon=True,
+                            ).start()
+                            st.rerun()
 
-            with _col_r:
-                st.markdown(
-                    "<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#ff7a2f;font-weight:600;margin-bottom:8px;'>📡 Reuters Connect</div>",
-                    unsafe_allow_html=True,
-                )
-                if reuters_codes:
-                    st.code("\n".join(reuters_codes), language=None)
-                    make_open_ci_button(
-                        [f"https://www.reutersconnect.com/all?search=all%3A{c.strip()}" for c in reuters_codes],
-                        "เปิด Reuters Connect", "#ff7a2f", proj_title,
-                    )
-                else:
-                    st.markdown("<span style='font-family:IBM Plex Mono,monospace;font-size:12px;color:#555a6a;'>ไม่มี Reuters</span>", unsafe_allow_html=True)
-
-            st.markdown("</div>", unsafe_allow_html=True)
+        # ── Debug Log ──
+        _log_lines = (_holder or {}).get("log", [])
+        if _log_lines:
+            st.markdown('<div class="pc-step">Debug Log</div>', unsafe_allow_html=True)
+            st.code("\n".join(_log_lines[-80:]), language=None)
 
         # SRT Editor
         srt = st.session_state.get("pycut_srt_content", "")
