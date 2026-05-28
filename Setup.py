@@ -95,10 +95,11 @@ def check_credentials():
     if os.path.exists(CREDS_FILE):
         ok("พบ credentials.json")
     else:
-        warn("ไม่พบ credentials.json")
-        warn("วาง credentials.json (รับจากผู้ดูแลโปรแกรม) ลงในโฟลเดอร์นี้ก่อนเปิดใช้งาน")
-        warn(f"  → {PROJECT_DIR}")
-        # ไม่ exit — ให้ setup ต่อได้ก่อน user จะใส่ทีหลังก็ได้
+        err("ไม่พบ credentials.json")
+        err("วาง credentials.json (รับจากผู้ดูแลโปรแกรม) ลงในโฟลเดอร์นี้ก่อน:")
+        err(f"  → {PROJECT_DIR}")
+        err("แล้วรัน python3 setup.py ใหม่อีกครั้ง")
+        sys.exit(1)
 
 # ──────────────────────────────────────────
 # Step 3 — สร้าง vmaster_config.json
@@ -177,22 +178,32 @@ echo ""
 # ─── เช็ค internet ก่อน pull ───
 echo "🔄 กำลังเช็ค update..."
 if ping -c 1 github.com &> /dev/null; then
+    HEAD_BEFORE=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
     git -C "$PROJECT_DIR" fetch origin main -q 2>/dev/null
+    FETCH_OK=$?
 
-    # merge แบบ safe — ถ้า conflict เอาของ local ไว้เสมอ
-    MERGE_OUTPUT=$(git -C "$PROJECT_DIR" merge -X ours origin/main 2>&1)
-
-    if echo "$MERGE_OUTPUT" | grep -q "Already up to date"; then
-        echo "✅ โปรแกรมเป็นเวอร์ชันล่าสุดแล้ว"
+    if [ $FETCH_OK -ne 0 ]; then
+        echo "⚠️  fetch ไม่สำเร็จ — ข้ามการ update"
     else
-        echo "✅ อัพเดทเสร็จแล้ว"
+        git -C "$PROJECT_DIR" merge --ff-only origin/main -q 2>/dev/null
+        MERGE_OK=$?
+        HEAD_AFTER=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null)
 
-        # เช็คว่า requirements.txt เปลี่ยนมั้ย
-        CHANGED=$(git -C "$PROJECT_DIR" diff HEAD@{{1}} HEAD --name-only 2>/dev/null | grep requirements.txt)
-        if [ -n "$CHANGED" ]; then
-            echo "📦 กำลังอัพเดท packages..."
-            "$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt" -q
-            echo "✅ อัพเดท packages เสร็จแล้ว"
+        if [ "$HEAD_BEFORE" = "$HEAD_AFTER" ]; then
+            echo "✅ โปรแกรมเป็นเวอร์ชันล่าสุดแล้ว"
+        elif [ $MERGE_OK -eq 0 ]; then
+            echo "✅ อัพเดทเสร็จแล้ว"
+
+            # เช็คว่า requirements.txt เปลี่ยนมั้ย
+            CHANGED=$(git -C "$PROJECT_DIR" diff "$HEAD_BEFORE" HEAD --name-only 2>/dev/null | grep requirements.txt)
+            if [ -n "$CHANGED" ]; then
+                echo "📦 กำลังอัพเดท packages..."
+                "$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt" -q
+                echo "✅ อัพเดท packages เสร็จแล้ว"
+            fi
+        else
+            echo "⚠️  อัพเดทไม่สำเร็จ — มีไฟล์แก้ไขค้างอยู่ในเครื่อง"
+            echo "   กรุณาแจ้งผู้ดูแลโปรแกรม"
         fi
     fi
 else
@@ -212,13 +223,35 @@ if [ ! -f "$PROJECT_DIR/credentials.json" ]; then
     exit 1
 fi
 
+# ─── เช็ค venv ───
+if [ ! -f "$STREAMLIT" ]; then
+    echo "❌ ไม่พบ Streamlit — venv อาจติดตั้งไม่สมบูรณ์"
+    echo "   กรุณารัน: python3 setup.py"
+    echo ""
+    echo "กด Enter เพื่อปิด..."
+    read
+    exit 1
+fi
+
+# ─── เช็ค port 8501 ───
+if lsof -ti:8501 &>/dev/null; then
+    echo "⚠️  LoadPAP เปิดอยู่แล้ว — เปิด browser ไปที่หน้าเดิม"
+    open "http://localhost:8501"
+    exit 0
+fi
+
 # ─── รัน Streamlit ───
 echo "🚀 กำลังเปิด LoadPAP..."
 "$STREAMLIT" run "$MAIN_PY" --server.headless true --server.port 8501 &
 STREAMLIT_PID=$!
 
-# รอให้ Streamlit พร้อม
-sleep 3
+# รอจนพร้อม (max 15 วิ)
+for i in $(seq 1 15); do
+    sleep 1
+    if lsof -ti:8501 &>/dev/null; then
+        break
+    fi
+done
 
 # เปิด Chrome
 open "http://localhost:8501"

@@ -17,10 +17,13 @@ yt-dlp>=2024.1.1
 # --- Video Processing ---
 opencv-python>=4.9.0
 Pillow>=10.0.0
-pyarrow==16.1.0
 
 # --- AI ---
 google-genai>=1.0.0
+pythainlp>=5.0.0
+faster-whisper>=1.0.0
+mlx-whisper>=0.3.0
+stable-ts[mlx]
 
 # --- Data & Utils ---
 pandas>=2.0.0

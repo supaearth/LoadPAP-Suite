@@ -556,6 +556,13 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
             elif not ffmpeg_exe and os.path.exists("/opt/homebrew/bin/ffmpeg"): ffmpeg_exe = "/opt/homebrew/bin/ffmpeg"
 
         # ตั้งค่าเครื่องยนต์โหลดวิดีโอ
+        class _YDLLogger:
+            def __init__(self): self.errors = []
+            def debug(self, msg): pass
+            def warning(self, msg): pass
+            def error(self, msg): self.errors.append(msg)
+
+        ydl_logger = _YDLLogger()
         ydl_opts = {
             # 💡 THE FIX: สั่งแบน AV01 เด็ดขาด! บังคับหา H.264 (avc1) ก่อน ถ้าไม่มีก็เอา MP4 อะไรก็ได้ที่ไม่ใช่ AV01
             'format': 'bestvideo[ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/bestvideo[ext=mp4][vcodec!^=av01][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]/best',
@@ -563,14 +570,23 @@ def download_worker(url, platform_name, video_dir, image_dir, gemini_key):
             'ffmpeg_location': ffmpeg_exe if (ffmpeg_exe and os.path.exists(ffmpeg_exe)) else None,
             'quiet': True, 'ignoreerrors': False, 'no_warnings': True,
             'socket_timeout': 30, 'retries': 3, 'noplaylist': True,
-            'outtmpl': f'{video_dir}/%(title).30s_@%(uploader)s - {source_tag}.%(ext)s', 
-            'windowsfilenames': True
+            'outtmpl': f'{video_dir}/%(title).30s_@%(uploader)s - {source_tag}.%(ext)s',
+            'windowsfilenames': True,
+            'logger': ydl_logger,
         }
-        
+
         try:
+            files_before = set(os.listdir(video_dir))
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                if ydl.download([clean_url]) == 0: return True, clean_url
-                else: return False, clean_url
+                ret_code = ydl.download([clean_url])
+            files_after = set(os.listdir(video_dir))
+            new_files = [f for f in (files_after - files_before) if not f.endswith('.part') and not f.endswith('.ytdl')]
+            if ret_code == 0 and new_files:
+                return True, clean_url
+            else:
+                err_detail = '; '.join(ydl_logger.errors) if ydl_logger.errors else f"ret={ret_code}, ไม่มีไฟล์ใน {video_dir}"
+                print(f"❌ yt-dlp ไม่มีไฟล์: {err_detail}")
+                return False, clean_url
         except Exception as e:
             print(f"❌ วิดีโอพัง: {e}")
             return False, clean_url

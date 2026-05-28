@@ -1,5 +1,6 @@
 import sys
 import os
+import platform
 
 import numpy as np
 import pandas as pd
@@ -33,7 +34,19 @@ from utils import (
 # ==========================================
 # 📍 0. ตั้งค่าตำแหน่ง FFmpeg
 # ==========================================
-FFMPEG_EXE = os.path.join(ROOT_DIR, "ffmpeg")
+def _get_ffmpeg():
+    arch = platform.machine()  # 'arm64' หรือ 'x86_64'
+    candidates = [
+        os.path.join(ROOT_DIR, f"ffmpeg_{arch}"),
+        os.path.join(ROOT_DIR, "ffmpeg"),
+        shutil.which("ffmpeg"),
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return "ffmpeg"  # fallback — ให้ subprocess throw เองถ้าไม่มีจริงๆ
+
+FFMPEG_EXE = _get_ffmpeg()
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
 
 def parse_sheet_time(t_str):

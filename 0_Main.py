@@ -290,7 +290,7 @@ st.markdown("""
 # ============================================================
 # 🧰 TOOL CARDS
 # ============================================================
-col1, col2, col3 = st.columns(3, gap="medium")
+col1, col2, col3, col4 = st.columns(4, gap="medium")
 
 with col1:
     st.markdown("""
@@ -342,6 +342,24 @@ with col3:
         <span class="lp-badge badge-orange">Gemini AI</span>
         <span class="lp-badge badge-yellow">Vision</span>
         <span class="lp-badge badge-orange">Sheets</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col4:
+    st.markdown("""
+    <div class="lp-tool-card" style="border-top: 2px solid #ff7a2f;">
+      <span class="lp-tool-icon">✂️</span>
+      <div class="lp-tool-name" style="color:#ff7a2f;">PyCUT</div>
+      <div class="lp-tool-title">ระบบสร้าง Subtitle + ตัดฟุตเทจ</div>
+      <div class="lp-tool-desc">
+        อ่าน Google Doc script → สร้างไฟล์ .srt อัตโนมัติ + ดาวน์โหลดและตัดฟุตเทจตาม Timecode
+        รองรับคลิปแนวตั้ง ตัดบรรทัดภาษาไทยด้วย Gemini
+      </div>
+      <div>
+        <span class="lp-badge badge-orange">SRT</span>
+        <span class="lp-badge badge-teal">Drive</span>
+        <span class="lp-badge badge-yellow">Gemini AI</span>
       </div>
     </div>
     """, unsafe_allow_html=True)

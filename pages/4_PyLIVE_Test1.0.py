@@ -113,7 +113,7 @@ def _ff() -> str:
     cfg_path = st.session_state.get("_cfg_cache", {}).get("ffmpeg_path", "")
     if cfg_path and os.path.isfile(cfg_path):
         return cfg_path
-    p = _find_bin("ffmpeg")
+    p = _get_ffmpeg_exe()
     if p:
         return p
     raise RuntimeError(
@@ -1201,7 +1201,7 @@ with st.sidebar:
         unsafe_allow_html=True)
 
     _cfg_ff = st.session_state.get("_cfg_cache", {}).get("ffmpeg_path", "")
-    ff_path = (_cfg_ff if _cfg_ff and os.path.isfile(_cfg_ff) else None) or _find_bin("ffmpeg")
+    ff_path = (_cfg_ff if _cfg_ff and os.path.isfile(_cfg_ff) else None) or _get_ffmpeg_exe()
     if ff_path:
         st.markdown('<div class="ff-ok">✅ ffmpeg พร้อมใช้งาน</div>', unsafe_allow_html=True)
     else:
