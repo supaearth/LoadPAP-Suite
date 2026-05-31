@@ -29,6 +29,10 @@ from utils import (
     save_config,
     ROOT_DIR,
     inject_global_css,
+    build_drive_name_contains_query,
+    parse_timecode_seconds,
+    escape_html,
+    has_nonempty_text,
 )
 
 # ==========================================
@@ -50,21 +54,7 @@ FFMPEG_EXE = _get_ffmpeg()
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
 
 def parse_sheet_time(t_str):
-    t_str = str(t_str).strip()
-    if not t_str or t_str == "0" or t_str.lower() in ["none", "nan"]: return 0.0
-    if ":" in t_str:
-        parts = t_str.split(":")
-        if len(parts) == 3: return float(parts[0])*3600 + float(parts[1])*60 + float(parts[2])
-        elif len(parts) == 2: return float(parts[0])*60 + float(parts[1])
-    if "." in t_str:
-        parts = t_str.split(".")
-        minutes = float(parts[0]) if parts[0] else 0.0
-        sec_str = parts[1]
-        if len(sec_str) == 1: sec_str += "0"
-        seconds = float(sec_str)
-        return (minutes * 60.0) + seconds
-    try: return float(t_str)
-    except (ValueError, TypeError): return 0.0
+    return parse_timecode_seconds(t_str, default=0.0)
 
 def update_sheet_status_by_name(service, spreadsheet_id, target_name, status_text):
     if not spreadsheet_id or not target_name: return
@@ -247,8 +237,7 @@ def batch_scan_drive(all_ids, drive_service):
     found_map = {}
     for i in range(0, len(all_ids), 20):
         chunk = all_ids[i:i+20]
-        query_parts = [f"name contains '{c}'" for c in chunk]
-        query = f"({' or '.join(query_parts)}) and trashed = false"
+        query = build_drive_name_contains_query(chunk)
         try:
             results = drive_service.files().list(
                 q=query, corpora='allDrives', supportsAllDrives=True,
@@ -438,7 +427,7 @@ with st.sidebar:
             app_config['src_folder'] = p
             save_config(app_config)
             st.rerun()
-    st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{st.session_state.src_folder or 'ยังไม่ได้เลือก'}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{escape_html(st.session_state.src_folder or 'ยังไม่ได้เลือก')}</div>", unsafe_allow_html=True)
 
     if st.button("📂 เลือกโฟลเดอร์คลัง", use_container_width=True):
         p = get_folder_path("Select Archive Folder")
@@ -447,7 +436,7 @@ with st.sidebar:
             app_config['archive_folder'] = p
             save_config(app_config)
             st.rerun()
-    st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{st.session_state.archive_folder or 'ยังไม่ได้เลือก'}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{escape_html(st.session_state.archive_folder or 'ยังไม่ได้เลือก')}</div>", unsafe_allow_html=True)
 
     if st.button("📂 เลือกโฟลเดอร์ปลายทาง", use_container_width=True):
         p = get_folder_path("Select Destination Folder")
@@ -456,7 +445,7 @@ with st.sidebar:
             app_config['dst_folder'] = p
             save_config(app_config)
             st.rerun()
-    st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{st.session_state.dst_folder or 'ยังไม่ได้เลือก'}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-family:IBM Plex Mono,monospace;font-size:var(--fs-xs);color:#555a6a;background:#1a1e26;border-radius:4px;padding:4px 8px;margin-bottom:6px;word-break:break-all;'>{escape_html(st.session_state.dst_folder or 'ยังไม่ได้เลือก')}</div>", unsafe_allow_html=True)
 
     st.divider()
     read_btn = st.button("🚀 เริ่มทำงาน", type="primary", use_container_width=True)
@@ -483,7 +472,7 @@ st.markdown("""
 if 'watchdog_on' not in st.session_state:
     st.session_state.watchdog_on = False
 
-_, _wdc = st.columns([8, 1])
+_, _wdc = st.columns([7, 2])
 with _wdc:
     _wd_on = st.toggle("🤖 Watchdog", value=st.session_state.watchdog_on, key="wd_toggle")
     st.session_state.watchdog_on = _wd_on
@@ -518,7 +507,9 @@ st.markdown(
 # ============================================================
 # 📥 FETCH JOBS
 # ============================================================
-if read_btn and sheet_url:
+if read_btn and not has_nonempty_text(sheet_url):
+    st.error("กรุณาใส่ URL Google Sheet")
+elif read_btn:
     for _k in ('_rush_r_opened', '_rush_g_opened', '_rush_r_sig', '_rush_g_sig'):
         st.session_state.pop(_k, None)
     with st.spinner("📥 กำลังดึงข้อมูลและค้นหาไฟล์..."):

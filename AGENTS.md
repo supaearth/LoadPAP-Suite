@@ -1,4 +1,4 @@
-# LoadPAP Suite — Project Context for Claude Code
+# LoadPAP Suite — Project Context for Codex
 
 ## โปรเจคคืออะไร
 

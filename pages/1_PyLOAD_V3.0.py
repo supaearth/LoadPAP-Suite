@@ -23,7 +23,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css, get_active_account_index
+from utils import get_g_services, extract_id, select_folder_mac, load_config, save_config, sanitize_filename, inject_global_css, get_active_account_index, build_drive_name_contains_query, escape_html, js_literal
 
 # ==========================================
 # 🛡️ 0. INITIALIZATION
@@ -72,19 +72,23 @@ def make_open_ci_button(urls, button_text, color_hex, project_name):
     valid_urls = [u for u in urls if str(u).startswith('http')]
     if not valid_urls: return
     total = len(valid_urls)
-    safe_project_name = project_name.replace("'", "\\'").replace('"', '\\"')
+    project_name_js = js_literal(project_name)
+    safe_button_text = escape_html(button_text)
 
     if total <= MAX_OPEN_TABS:
-        js_links = " ".join([f"setTimeout(() => window.open('{u}', '_blank'), {i*400});" for i, u in enumerate(valid_urls)])
-        js_code = f"navigator.clipboard.writeText('{safe_project_name}'); {js_links}"
+        js_links = " ".join([
+            f"setTimeout(() => window.open({js_literal(u)}, '_blank'), {i*400});"
+            for i, u in enumerate(valid_urls)
+        ])
+        js_code = f"navigator.clipboard.writeText({project_name_js}); {js_links}"
         html = f"""
-        <button onclick="{js_code}"
+        <button onclick="{escape_html(js_code)}"
         style="padding: 10px 15px; background-color: #1a1e26; color: {color_hex};
         border: 1px solid {color_hex}; border-radius: 8px; cursor: pointer; font-weight: bold;
         width: 100%; margin-bottom: 8px; font-family: 'IBM Plex Sans Thai', sans-serif; transition: background-color 0.15s;"
         onmouseover="this.style.backgroundColor='{color_hex}22'"
         onmouseout="this.style.backgroundColor='#1a1e26'">
-        🚀 {button_text} ({total} แท็บ)
+        🚀 {safe_button_text} ({total} แท็บ)
         </button>
         """
         components.html(html, height=55)
@@ -101,16 +105,19 @@ def make_open_ci_button(urls, button_text, color_hex, project_name):
             end = start + len(batch) - 1
             lbl = f"{start}–{end}"
             sk = f"pload_{safe_key}_{i}"
-            js_links = " ".join([f"setTimeout(()=>window.open('{u}','_blank'),{j*400});" for j, u in enumerate(batch)])
+            js_links = " ".join([
+                f"setTimeout(()=>window.open({js_literal(u)},'_blank'),{j*400});"
+                for j, u in enumerate(batch)
+            ])
             js_click = (
-                f"navigator.clipboard.writeText('{safe_project_name}');"
+                f"navigator.clipboard.writeText({project_name_js});"
                 f"{js_links}"
                 f"localStorage.setItem('{sk}','1');"
                 f"this.classList.add('opened');"
                 f"this.querySelector('.lbl').textContent='✅ {lbl}';"
             )
             buttons_html += (
-                f'<button id="b{i}" class="batch-btn" onclick="{js_click}">'
+                f'<button id="b{i}" class="batch-btn" onclick="{escape_html(js_click)}">'
                 f'<span class="lbl">🚀 {lbl}</span>'
                 f'</button>'
             )
@@ -131,7 +138,7 @@ def make_open_ci_button(urls, button_text, color_hex, project_name):
         .batch-btn.opened{{background:{color_hex}18;opacity:.5;border-style:dashed;cursor:default;}}
         .bh{{color:{color_hex}99;font-family:'IBM Plex Sans Thai',sans-serif;font-size:11px;margin-bottom:4px;}}
         </style>
-        <div class="bh">🚀 {button_text} — {total} รายการ · {n} ชุด</div>
+        <div class="bh">🚀 {safe_button_text} — {total} รายการ · {n} ชุด</div>
         <div style="display:flex;flex-wrap:wrap;">{buttons_html}</div>
         <script>(function(){{{restore_js}}})();</script>
         """
@@ -140,14 +147,18 @@ def make_open_ci_button(urls, button_text, color_hex, project_name):
 def display_social_link(url, icon_url, platform_name):
     if not url: return
     display_url = url if len(url) <= 40 else url[:37] + '...'
+    safe_url = escape_html(url)
+    safe_icon_url = escape_html(icon_url)
+    safe_display_url = escape_html(display_url)
+    open_js = escape_html(f"window.open({js_literal(url)}, '_blank')")
     html = f"""
     <div style="display: flex; align-items: center; justify-content: space-between; 
     background-color: #1a1e26; padding: 8px; border-radius: 8px; margin-bottom: 5px; border: 1px solid rgba(255,255,255,0.08);">
         <div style="display: flex; align-items: center;">
-            <img src="{icon_url}" width="20" height="20" style="margin-right: 10px;">
-            <a href="{url}" target="_blank" style="text-decoration: none; #e8eaf0; font-family: monospace; font-size:var(--fs-md);">{display_url}</a>
+            <img src="{safe_icon_url}" width="20" height="20" style="margin-right: 10px;">
+            <a href="{safe_url}" target="_blank" style="text-decoration: none; color:#e8eaf0; font-family: monospace; font-size:var(--fs-md);">{safe_display_url}</a>
         </div>
-        <button onclick="window.open('{url}', '_blank')" 
+        <button onclick="{open_js}"
         style="padding: 3px 8px; background-color: white; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size:var(--fs-sm);">เปิด</button>
     </div>
     """
@@ -205,8 +216,7 @@ def batch_search_drive(services_list, codes):
 
     def search_chunk(args):
         svc, chunk = args
-        query_parts = [f"name contains '{c}'" for c in chunk]
-        query = f"({' or '.join(query_parts)}) and trashed = false"
+        query = build_drive_name_contains_query(chunk)
         try:
             results = svc.files().list(
                 q=query,
@@ -237,7 +247,7 @@ def batch_search_drive(services_list, codes):
 
 def search_file_in_drive(service, archive_id, code):
     try:
-        query = f"name contains '{code}' and trashed = false"
+        query = build_drive_name_contains_query([code])
         results = service.files().list(q=query, corpora='allDrives', supportsAllDrives=True, includeItemsFromAllDrives=True, fields="files(id, name, webViewLink)", pageSize=3).execute()
         return results.get('files', [])
     except Exception: return []

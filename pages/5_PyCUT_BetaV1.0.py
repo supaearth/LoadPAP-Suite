@@ -31,6 +31,8 @@ from utils import (
     save_config,
     ROOT_DIR,
     inject_global_css,
+    parse_timecode_seconds,
+    escape_html,
 )
 
 # ──────────────────────────────────────────────────────────────
@@ -158,26 +160,7 @@ _gemini_key_idx = [0]
 # DOC PARSER
 # ──────────────────────────────────────────────────────────────
 def parse_tc(tc_str: str) -> float | None:
-    tc_str = str(tc_str).strip()
-    if not tc_str or tc_str in ("", "nan", "None", "-", "–"):
-        return None
-    if "." in tc_str:
-        parts = tc_str.split(".")
-        if len(parts) == 3:
-            # H.MM.SS
-            hours = float(parts[0]) if parts[0] else 0.0
-            minutes = float(parts[1]) if parts[1] else 0.0
-            sec_str = parts[2].ljust(2, "0")[:2]
-            return hours * 3600.0 + minutes * 60.0 + float(sec_str)
-        else:
-            # MM.SS
-            minutes = float(parts[0]) if parts[0] else 0.0
-            sec_str = parts[1].ljust(2, "0")[:2]
-            return minutes * 60.0 + float(sec_str)
-    try:
-        return float(tc_str)
-    except Exception:
-        return None
+    return parse_timecode_seconds(tc_str, default=None)
 
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tiff", ".tif"}
@@ -1184,7 +1167,7 @@ def _align_via_gemini_words(
     for model, api_ver in _TEXT_ALIGN_MODELS:
         for key in _ordered:
             try:
-                log.append(f"  🤖 Gemini word-align {model} key[...{key[-4:]}]")
+                log.append(f"  🤖 AI word-align {model} key[...{key[-4:]}]")
                 c = genai.Client(api_key=key, http_options={"api_version": api_ver})
                 resp = c.models.generate_content(model=model, contents=[prompt])
                 raw = resp.text.strip()
@@ -1208,7 +1191,7 @@ def _align_via_gemini_words(
                 while len(result) < len(sentences):
                     last_end = result[-1][2] if result else 0.0
                     result.append((sentences[len(result)], last_end + 0.2, last_end + 2.2))
-                log.append(f"  ✅ Gemini word-align: {len(result)} blocks ← {model}")
+                log.append(f"  ✅ AI word-align: {len(result)} blocks ← {model}")
                 return result[:len(sentences)]
             except Exception as _e:
                 err_str = str(_e)
@@ -1238,7 +1221,7 @@ def _align_via_gemini_text(
         return []
     keys = _gemini_keys()
     if not keys:
-        log.append("  ⚠️ Gemini text-align: ไม่มี key")
+        log.append("  ⚠️ AI text-align: ไม่มี key")
         return []
 
     clean_segs = [
@@ -1268,7 +1251,7 @@ def _align_via_gemini_text(
     for model, api_ver in _TEXT_ALIGN_MODELS:
         for key in _ordered:
             try:
-                log.append(f"  🤖 Gemini text-align {model} key[...{key[-4:]}]")
+                log.append(f"  🤖 AI text-align {model} key[...{key[-4:]}]")
                 c = genai.Client(api_key=key, http_options={"api_version": api_ver})
                 resp = c.models.generate_content(model=model, contents=[prompt])
                 raw = resp.text.strip()
@@ -1292,7 +1275,7 @@ def _align_via_gemini_text(
                 while len(result) < len(sentences):
                     last_end = result[-1][2] if result else 0.0
                     result.append((sentences[len(result)], last_end + 0.2, last_end + 2.2))
-                log.append(f"  ✅ Gemini text-align: {len(result)} blocks ← {model}")
+                log.append(f"  ✅ AI text-align: {len(result)} blocks ← {model}")
                 return result[:len(sentences)]
             except Exception as _e:
                 err_str = str(_e)
@@ -1303,7 +1286,7 @@ def _align_via_gemini_text(
                 log.append(f"  ⚠️ {model}: {err_str[:100]}")
                 break  # error อื่นไม่ต้อง retry key เดิม
 
-    log.append("  ⚠️ Gemini text-align: ทุก model ล้มเหลว — fallback char-proportional")
+    log.append("  ⚠️ AI text-align: ทุก model ล้มเหลว — fallback char-proportional")
     return []
 
 
@@ -1454,7 +1437,7 @@ def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list
     with open(audio_path, "rb") as f:
         audio_bytes = f.read()
     if len(audio_bytes) > 19 * 1024 * 1024:
-        log.append(f"  ⚠️ SOT audio ใหญ่เกิน 19 MB — ข้าม Gemini timing")
+        log.append(f"  ⚠️ SOT audio ใหญ่เกิน 19 MB — ข้าม AI timing")
         return []
 
     numbered = "\n".join(f"{i+1}. {s}" for i, s in enumerate(sentences))
@@ -1467,7 +1450,7 @@ def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list
 
     keys = _gemini_keys()
     if not keys:
-        log.append(f"  ⚠️ ไม่มี Gemini key")
+        log.append(f"  ⚠️ ไม่มี AI key")
         return []
 
     # เริ่มจาก key ที่ไม่ quota แล้วครั้งล่าสุด (persistent rotation แบบ PyLOG)
@@ -1477,7 +1460,7 @@ def _analyze_sot_timing(audio_path: str, sentences: list[str], client, log: list
     for model, api_ver in _SOT_MODELS:
         for key in _ordered:
             try:
-                log.append(f"  → Gemini {model} key[...{key[-4:]}]")
+                log.append(f"  → AI timing {model} key[...{key[-4:]}]")
                 c = genai.Client(api_key=key, http_options={"api_version": api_ver})
                 resp = c.models.generate_content(
                     model=model,
@@ -1918,7 +1901,7 @@ def _batch_sot_gemini(sot_rows: list[dict], log: list):
         '[{"clip":0,"alignments":[{"idx":1,"start":0.0,"end":3.5},{"idx":2,"start":3.6,"end":7.2}]},'
         '{"clip":1,"alignments":[{"idx":1,"start":0.0,"end":4.1}]}]'
     )
-    log.append(f"  🤖 Gemini batch SOT: {len(items)} clips | prompt {len(prompt)} chars")
+    log.append(f"  🤖 AI batch SOT: {len(items)} clips | prompt {len(prompt)} chars")
 
     keys = _gemini_keys()
     if not keys:
@@ -1970,7 +1953,7 @@ def _batch_sot_gemini(sot_rows: list[dict], log: list):
                 log.append(f"  ⚠️ {model}: {err_str[:100]}")
                 break
 
-    log.append("  ⚠️ batch SOT Gemini ล้มเหลว — char-proportional fallback")
+    log.append("  ⚠️ batch SOT AI ล้มเหลว — char-proportional fallback")
     _batch_sot_fallback(items, log)
 
 
@@ -2179,7 +2162,7 @@ def run_pycut(parsed: dict, settings: dict, output_folder: str, stock_watch_fold
         if do_srt:
             _sot_pending = [r for r in parsed["rows"] if r.get("_sot_whisper") and r.get("sot") and r.get("bullets")]
             if _sot_pending:
-                _set_status(f"🤖  Gemini SOT batch ({len(_sot_pending)} clips)...")
+                _set_status(f"🤖  AI SOT batch ({len(_sot_pending)} clips)...")
                 _batch_sot_gemini(_sot_pending, log)
             for r in parsed["rows"]:
                 r.pop("_sot_whisper", None)  # clean up temp key
@@ -2362,7 +2345,7 @@ with st.sidebar:
             st.session_state["pycut_output_folder"] = _p
             _cfg2 = load_config(); _cfg2["pycut_output_folder"] = _p; save_config(_cfg2)
             st.rerun()
-    st.markdown(_sb_path.format(st.session_state["pycut_output_folder"] or "ยังไม่ได้เลือก"), unsafe_allow_html=True)
+    st.markdown(_sb_path.format(escape_html(st.session_state["pycut_output_folder"] or "ยังไม่ได้เลือก")), unsafe_allow_html=True)
 
     if st.button("📂 เลือก Stock Watch Folder", use_container_width=True):
         _p = select_folder_mac("เลือกโฟลเดอร์ที่วาง Stock Footage ที่ดาวน์โหลดแล้ว")
@@ -2543,7 +2526,7 @@ else:
             unsafe_allow_html=True,
         )
         c2.markdown(
-            f"<div class='pc-mono' style='padding-top:6px;'>{footage_disp}</div>",
+            f"<div class='pc-mono' style='padding-top:6px;'>{escape_html(footage_disp)}</div>",
             unsafe_allow_html=True,
         )
         c3.markdown(
@@ -2551,7 +2534,7 @@ else:
             unsafe_allow_html=True,
         )
         c4.markdown(
-            f"<div style='font-family:IBM Plex Sans Thai,sans-serif;font-size:12px;color:#8b90a0;padding-top:6px;'>{b_disp or '—'}</div>",
+            f"<div style='font-family:IBM Plex Sans Thai,sans-serif;font-size:12px;color:#8b90a0;padding-top:6px;'>{escape_html(b_disp or '—')}</div>",
             unsafe_allow_html=True,
         )
         c5.markdown(
@@ -2592,7 +2575,7 @@ else:
                 _ifoot = _idisp or "—"
             _ic1, _ic2 = st.columns([5, 0.8])
             _ic1.markdown(
-                f"<div class='pc-mono' style='padding-top:6px;'>{_ifoot}</div>",
+                f"<div class='pc-mono' style='padding-top:6px;'>{escape_html(_ifoot)}</div>",
                 unsafe_allow_html=True,
             )
             _ic2.markdown(
@@ -2646,7 +2629,7 @@ else:
         )
 
         # ── Toggle ขวาสุด — เหมือน PyRUSH: spacer เปล่า [8] + toggle [1] ──
-        _, _pr_tog_col = st.columns([8, 1])
+        _, _pr_tog_col = st.columns([7, 2])
         with _pr_tog_col:
             _new_prewd = st.toggle(
                 "🐕 Watchdog",

@@ -20,7 +20,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 from utils import (load_config, inject_global_css,
-                   get_docs_service, get_drive_service, extract_id)
+                   get_docs_service, get_drive_service, extract_id,
+                   build_drive_name_equals_query)
 
 # ============================================================
 # 0.  CONSTANTS
@@ -891,9 +892,8 @@ def _search_drive_by_name(filename: str, log=None) -> Optional[str]:
         if log: log(msg)
     try:
         service = get_drive_service()
-        safe_name = filename.replace("'", "\\'")
         results = service.files().list(
-            q=f"name='{safe_name}' and trashed=false",
+            q=build_drive_name_equals_query(filename),
             fields="files(id, name, size, mimeType)",
             pageSize=5,
             orderBy="modifiedTime desc",

@@ -3,13 +3,21 @@ import sys, os
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
-from utils import load_config, save_config, inject_global_css, add_account, remove_account, get_all_accounts_info, set_active_account
+from utils import load_config, save_config, inject_global_css, add_account, remove_account, get_all_accounts_info, set_active_account, resolve_loadpap_page
 
 st.set_page_config(
     page_title="LoadPAP Suite",
     page_icon="🚀",
     layout="wide"
 )
+
+_direct_page = st.query_params.get("__loadpap_page")
+if _direct_page:
+    _target_page = resolve_loadpap_page(_direct_page)
+    if _target_page:
+        st.query_params.clear()
+        st.switch_page(_target_page)
+
 inject_global_css()
 
 # ============================================================
@@ -307,7 +315,7 @@ with col1:
         <span class="lp-badge badge-orange">Global Focus</span>
         <span class="lp-badge badge-teal">News Digest</span>
         <span class="lp-badge badge-blue">News Moments</span>
-        <span class="lp-badge badge-yellow">The World Dialouge</span>       
+        <span class="lp-badge badge-yellow">The World Dialogue</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -335,11 +343,11 @@ with col3:
       <div class="lp-tool-name" style="color:#ff7a2f;">PyLOG</div>
       <div class="lp-tool-title">ระบบบันทึก Log ด้วย AI</div>
       <div class="lp-tool-desc">
-        สแกนไฟล์วิดีโอในโฟลเดอร์ วิเคราะห์ภาพนิ่งด้วย Gemini Vision แล้วบันทึกชื่อบุคคล
+        สแกนไฟล์วิดีโอในโฟลเดอร์ วิเคราะห์ภาพนิ่งด้วย AI Vision แล้วบันทึกชื่อบุคคล
         และสรุปเนื้อหาลง Google Sheet โดยอัตโนมัติ
       </div>
       <div>
-        <span class="lp-badge badge-orange">Gemini AI</span>
+        <span class="lp-badge badge-orange">AI Vision</span>
         <span class="lp-badge badge-yellow">Vision</span>
         <span class="lp-badge badge-orange">Sheets</span>
       </div>
@@ -354,12 +362,12 @@ with col4:
       <div class="lp-tool-title">ระบบสร้าง Subtitle + ตัดฟุตเทจ</div>
       <div class="lp-tool-desc">
         อ่าน Google Doc script → สร้างไฟล์ .srt อัตโนมัติ + ดาวน์โหลดและตัดฟุตเทจตาม Timecode
-        รองรับคลิปแนวตั้ง ตัดบรรทัดภาษาไทยด้วย Gemini
+        รองรับคลิปแนวตั้ง ตัดบรรทัดภาษาไทยด้วย AI
       </div>
       <div>
         <span class="lp-badge badge-orange">SRT</span>
         <span class="lp-badge badge-teal">Drive</span>
-        <span class="lp-badge badge-yellow">Gemini AI</span>
+        <span class="lp-badge badge-yellow">AI Assist</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -492,7 +500,7 @@ with info2:
           <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#2dd4a8;">✓ bundled</span>
         </div>
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8b90a0;">Gemini API</span>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8b90a0;">AI Vision API</span>
           <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#ffd166;">key required</span>
         </div>
         <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -534,12 +542,12 @@ st.markdown("""
 
 _cfg_col, _acc_col = st.columns(2, gap="medium")
 
-# ── Gemini API Keys ──
+# ── AI API Keys ──
 with _cfg_col:
     with st.container(border=True):
         st.markdown(
             "<div style='font-family:IBM Plex Mono,monospace;font-size:11px;font-weight:600;"
-            "color:#ffd166;letter-spacing:.06em;margin-bottom:10px;'>🔑 GEMINI API KEYS</div>",
+            "color:#ffd166;letter-spacing:.06em;margin-bottom:10px;'>🔑 AI API KEYS</div>",
             unsafe_allow_html=True
         )
         k1_saved = bool(st.session_state.gemini_key1)

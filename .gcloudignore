@@ -1,0 +1,37 @@
+.gcloudignore
+.git
+.gitignore
+.DS_Store
+.claude/
+
+# Local secrets and user state
+credentials.json
+token.pickle
+token_*.pickle
+vmaster_config.json
+.env
+
+# Local environments and generated files
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+artifacts/
+pylive_cache/
+START.command
+
+# macOS-local binaries; Cloud Run installs ffmpeg in the image.
+ffmpeg
+ffmpeg_x86_64
+ffprobe
+ffplay
+
+# Repo maintenance docs are not needed in the runtime image.
+docs/
+CONTEXT.md
+loadpap_dark_design_guide.html

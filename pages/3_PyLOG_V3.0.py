@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from utils import get_g_creds, select_folder_mac, load_config, inject_global_css
+from utils import get_g_creds, select_folder_mac, load_config, inject_global_css, escape_html
 
 # ==========================================
 # 🧠 GEMINI AI ENGINE (ไม่แตะ)
@@ -21,7 +21,7 @@ from utils import get_g_creds, select_folder_mac, load_config, inject_global_css
 def analyze_video_with_gemini(video_path, gemini_key):
     import re
     if not gemini_key or len(gemini_key) < 20:
-        return {"person_name": "Unknown (Error)", "confidence_score": 0.0, "summary": "❌ Gemini Key ไม่ถูกต้องหรือยังไม่ได้ตั้งค่า"}
+        return {"person_name": "Unknown (Error)", "confidence_score": 0.0, "summary": "❌ AI Key ไม่ถูกต้องหรือยังไม่ได้ตั้งค่า"}
     ts             = int(time.time())
     temp_img_path  = f"temp_{ts}_1.jpg"
     temp_img_path2 = f"temp_{ts}_2.jpg"
@@ -277,7 +277,7 @@ st.markdown("""
   <div style="font-size:var(--fs-stat);">📋</div>
   <div>
     <div style="font-family:'IBM Plex Sans Thai',sans-serif;font-size:var(--fs-xl);font-weight:700;color:#e8eaf0;line-height:1.1;">PyLOG</div>
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;margin-top:2px;letter-spacing:.04em;">AI FOOTAGE LOGGER — GEMINI VISION</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:var(--fs-xs);color:#555a6a;margin-top:2px;letter-spacing:.04em;">AI FOOTAGE LOGGER — VISION ENGINE</div>
   </div>
 </div>
 <div style="height:1px;background:rgba(255,255,255,0.08);margin:16px 0 20px 0;"></div>
@@ -316,13 +316,13 @@ else:
 st.markdown(f"""
 <div class="jit-progress">
   <div class="jit-prog-header">
-    <div class="jit-prog-title">{prog_label}</div>
+    <div class="jit-prog-title">{escape_html(prog_label)}</div>
     <div class="jit-prog-pct">{pct}%</div>
   </div>
   <div class="jit-bar-bg">
     <div class="jit-bar-fill" style="width:{pct}%;background:{bar_color};"></div>
   </div>
-  <div class="jit-prog-sub">{prog_sub}</div>
+  <div class="jit-prog-sub">{escape_html(prog_sub)}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -364,8 +364,8 @@ if st.session_state.file_queue:
         log_html += f"""
         <div class="jit-log-row">
           <div class="jit-log-dot" style="background:{dot};"></div>
-          <div class="jit-log-name">{fname}</div>
-          <div class="jit-log-person">{person}</div>
+          <div class="jit-log-name">{escape_html(fname)}</div>
+          <div class="jit-log-person">{escape_html(person)}</div>
           {badge}
         </div>"""
     log_html += '</div>'
@@ -376,7 +376,7 @@ if st.session_state.file_queue:
 # ==========================================
 if run_btn:
     if not st.session_state.gemini_key:
-        st.error("❌ ยังไม่ได้ตั้งค่า Gemini Key — กลับไปหน้า Main แล้วกด บันทึก Keys ก่อนครับ")
+        st.error("❌ ยังไม่ได้ตั้งค่า AI Key — กลับไปหน้า Main แล้วกด บันทึก Keys ก่อนครับ")
     elif not st.session_state.target_folder:
         st.error("❌ ลืมเลือกโฟลเดอร์วิดีโอครับ!")
     elif not st.session_state.ep_name:
